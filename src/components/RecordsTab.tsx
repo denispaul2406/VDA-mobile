@@ -3,6 +3,14 @@ import { Pill, Activity, FileText, Stethoscope, Volume2, VolumeX, Plus, CheckCir
 import { FhirCondition, FhirDocument, FhirMedication, FhirObservation, LanguageCode, PatientDemographics, VaccineRecord } from '../types';
 import { VACCINES_DATA } from '../data/syntheticData';
 import { speakText, stopSpeaking, getTranslation, getLocalizedField, playChime } from '../utils/i18n';
+import {
+  getLocalPrescriptions,
+  getTodayMedicineReminders,
+  toggleReminderTaken,
+  LocalPrescription,
+  LocalMedicineReminder,
+  createLocalPrescriptionFromUpload,
+} from '../utils/localMedicationStorage';
 
 interface RecordsTabProps {
   patient: PatientDemographics;
@@ -30,6 +38,26 @@ export const RecordsTab: React.FC<RecordsTabProps> = ({
   const [selectedDoc, setSelectedDoc] = useState<FhirDocument | null>(null);
   const [selectedVaccineCert, setSelectedVaccineCert] = useState<VaccineRecord | null>(null);
   const [showCertToast, setShowCertToast] = useState(false);
+
+  // Local Prescription Storage (Strictly prescription-derived, no preexisting health data)
+  const [localPrescriptions, setLocalPrescriptions] = useState<LocalPrescription[]>(() => getLocalPrescriptions());
+  const [localReminders, setLocalReminders] = useState<LocalMedicineReminder[]>(() => getTodayMedicineReminders());
+  const recordsFileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const latestRx = localPrescriptions.length > 0 ? localPrescriptions[0] : null;
+
+  const handleUploadFromRecords = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    createLocalPrescriptionFromUpload(file.name);
+    setLocalPrescriptions(getLocalPrescriptions());
+    setLocalReminders(getTodayMedicineReminders());
+  };
+
+  const handleToggleLocalDose = (remId: string) => {
+    toggleReminderTaken(remId);
+    setLocalReminders(getTodayMedicineReminders());
+  };
 
   // Vaccines for active patient
   const patientVaccines: VaccineRecord[] = VACCINES_DATA[patient.id] || VACCINES_DATA['patient-001'] || [];
@@ -207,112 +235,173 @@ export const RecordsTab: React.FC<RecordsTabProps> = ({
 
       {/* Main Section Content Area */}
       <div className="flex-1 overflow-y-auto px-3.5 sm:px-4 py-3.5 space-y-3.5 pb-8 min-h-0">
-        {/* 1. MEDICATIONS SECTION */}
+        {/* 1. MEDICATIONS SECTION (From uploaded prescription only, stored locally) */}
         {activeSection === 'medications' && (
           <div className="space-y-3">
-            {/* Adherence Overview Banner */}
-            <div className="p-3.5 rounded-2xl bg-gradient-to-r from-blue-950/70 to-slate-900 border border-blue-500/30 flex items-center justify-between">
-              <div>
-                <p className="text-xs text-blue-300 font-medium">{getTranslation(lang, 'adherenceRate')}</p>
-                <h3 className="text-xl font-bold text-white">{calculateOverallAdherence()}%</h3>
-                <p className="text-[10px] text-slate-400">{getTranslation(lang, 'adherenceAdvice')}</p>
-              </div>
-              <div className="w-12 h-12 rounded-full border-4 border-blue-400 border-t-emerald-400 flex items-center justify-center font-bold text-xs text-white">
-                {calculateOverallAdherence()}%
-              </div>
-            </div>
+            <input
+              type="file"
+              ref={recordsFileInputRef}
+              onChange={handleUploadFromRecords}
+              accept=".pdf,.jpg,.jpeg,.png"
+              className="hidden"
+            />
 
-            {/* Medication Card List */}
-            {medications.map((med) => {
-              const isSpeaking = speakingId === med.id;
-              const medName = getLocalizedField(med, 'name', lang);
-              const medDosage = getLocalizedField(med, 'dosage', lang);
-              const medTiming = getLocalizedField(med, 'timing', lang);
-              const spokenText = `${medName}. ${medDosage}. ${medTiming}.`;
-
-              return (
-                <div
-                  key={med.id}
-                  className="p-4 rounded-2xl bg-slate-900 border border-slate-800 hover:border-slate-700 transition-all space-y-2.5 shadow-sm"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <h4 className="text-sm font-bold text-white">
-                          {medName}
-                        </h4>
-                        <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-400">
-                          {med.code}
-                        </span>
-                      </div>
-                      <p className="text-xs text-emerald-400 font-semibold mt-0.5">
-                        {medDosage}
-                      </p>
-                    </div>
-
+            {latestRx ? (
+              <>
+                {/* Prescription Overview Card */}
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-indigo-950/70 via-slate-900 to-indigo-950/50 border border-indigo-500/30 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-indigo-300 uppercase tracking-wider">
+                      {lang === 'hi' ? '📋 डॉक्टर की पर्ची' : '📋 Uploaded Prescription'}
+                    </span>
                     <button
-                      onClick={() => handleSpeak(med.id, spokenText)}
-                      className={`p-2 rounded-xl border transition-all ${
-                        isSpeaking
-                          ? 'bg-emerald-500 text-slate-950 border-emerald-400 animate-pulse'
-                          : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:text-white'
-                      }`}
-                      title={getTranslation(lang, 'readAloud')}
+                      onClick={() => recordsFileInputRef.current?.click()}
+                      className="text-xs text-indigo-300 hover:text-white underline font-medium"
                     >
-                      {isSpeaking ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
+                      {lang === 'hi' ? 'नई पर्ची जोड़ें' : 'Upload New'}
                     </button>
                   </div>
-
-                  {/* Frequency & Timing Badge */}
-                  <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-300">
-                    <span className="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700">
-                      ⏰ {med.timeOfDay.join(' • ')}
-                    </span>
-                    <span className="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700">
-                      🍽️ {medTiming}
-                    </span>
-                  </div>
-
-                  {/* Refill & Days Remaining Meter */}
-                  <div>
-                    <div className="flex justify-between text-[11px] text-slate-400 mb-1">
-                      <span>{getTranslation(lang, 'daysRemaining')}: <strong className="text-white">{med.daysRemaining}</strong></span>
-                      <span>{med.refillCount} {getTranslation(lang, 'refillsLeft')}</span>
-                    </div>
-                    <div className="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden">
-                      <div
-                        className={`h-full rounded-full ${
-                          med.daysRemaining < 10 ? 'bg-amber-400' : 'bg-emerald-400'
-                        }`}
-                        style={{ width: `${Math.min(100, (med.daysRemaining / med.totalDays) * 100)}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Provenance & Interactive Checkbox */}
-                  <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
-                    <p className="text-[10px] text-slate-400">
-                      {med.prescribedDate} · {med.sourceFacility}
-                    </p>
-                    <button
-                      onClick={() => onToggleMedicationTaken(med.id)}
-                      className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 ${
-                        med.takenToday
-                          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                          : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-md shadow-emerald-950'
-                      }`}
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>{med.takenToday ? getTranslation(lang, 'takenToday') : getTranslation(lang, 'markTaken')}</span>
-                    </button>
-                  </div>
+                  <h3 className="text-sm font-bold text-white">{latestRx.filename}</h3>
+                  <p className="text-xs text-indigo-100/90 leading-relaxed">
+                    {latestRx.summaryText[lang] || latestRx.summaryText.hi || latestRx.summaryText.en}
+                  </p>
+                  <p className="text-[10px] text-slate-400">
+                    {lang === 'hi' ? 'अपलोड दिनांक: ' : 'Uploaded on: '}
+                    {new Date(latestRx.uploadedAt).toLocaleDateString()}
+                  </p>
                 </div>
-              );
-            })}
+
+                {/* Prescribed Medications */}
+                <div className="space-y-2.5">
+                  <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider px-1">
+                    {lang === 'hi' ? 'पर्ची में लिखी दवाइयां' : 'Prescribed Medicines'}
+                  </h4>
+
+                  {latestRx.medications.map((med) => {
+                    const isSpeaking = speakingId === med.id;
+                    const medName = lang === 'hi' && med.nameHi ? med.nameHi : med.name;
+                    const spokenText = `${medName}. ${med.dosage}. ${med.frequency}. ${med.instructions || ''}`;
+
+                    return (
+                      <div
+                        key={med.id}
+                        className="p-4 rounded-2xl bg-slate-900 border border-slate-800 hover:border-slate-700 transition-all space-y-2.5 shadow-sm"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <h4 className="text-sm font-bold text-white">{medName}</h4>
+                              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300">
+                                {med.dosage}
+                              </span>
+                            </div>
+                            <p className="text-xs text-emerald-400 font-semibold mt-0.5">
+                              {med.frequency}
+                            </p>
+                          </div>
+
+                          <button
+                            onClick={() => handleSpeak(med.id, spokenText)}
+                            className={`p-2 rounded-xl border transition-all ${
+                              isSpeaking
+                                ? 'bg-emerald-500 text-slate-950 border-emerald-400 animate-pulse'
+                                : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:text-white'
+                            }`}
+                            title={getTranslation(lang, 'readAloud')}
+                          >
+                            {isSpeaking ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
+                          </button>
+                        </div>
+
+                        {/* Timings from prescription */}
+                        <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-300">
+                          <span className="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700">
+                            ⏰ {med.timings.join(' • ')}
+                          </span>
+                          <span className="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700">
+                            🍽️ {med.foodRelation === 'after_food' ? 'खाने के बाद' : 'खाने से पहले'}
+                          </span>
+                        </div>
+
+                        {med.instructions && (
+                          <p className="text-[11px] text-slate-400 italic">
+                            ℹ️ {med.instructions}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Today's Scheduled Reminders */}
+                {localReminders.length > 0 && (
+                  <div className="space-y-2.5 pt-2">
+                    <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider px-1">
+                      {lang === 'hi' ? 'आज की दवा खुराक (Reminders)' : 'Today’s Scheduled Reminders'}
+                    </h4>
+
+                    {localReminders.map((rem) => (
+                      <div
+                        key={rem.id}
+                        className={`flex items-center justify-between p-3 rounded-xl border transition-all ${
+                          rem.taken
+                            ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-200'
+                            : 'bg-slate-900 border-slate-800 text-slate-200'
+                        }`}
+                      >
+                        <div>
+                          <p className="text-xs font-bold text-white">{rem.medicationName}</p>
+                          <p className="text-[10px] text-slate-400">
+                            ⏰ {rem.time} • {rem.foodRelation}
+                          </p>
+                        </div>
+
+                        <button
+                          onClick={() => handleToggleLocalDose(rem.id)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 flex items-center gap-1 ${
+                            rem.taken
+                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                              : 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
+                          }`}
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>{rem.taken ? (lang === 'hi' ? 'ली गई' : 'Taken') : (lang === 'hi' ? 'दवा ली' : 'Take')}</span>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              /* Empty state prompting prescription upload */
+              <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 text-center space-y-3">
+                <div className="w-12 h-12 mx-auto rounded-2xl bg-indigo-500/15 text-indigo-400 flex items-center justify-center">
+                  <FileText className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">
+                    {lang === 'hi' ? 'कोई पर्ची उपलब्ध नहीं है' : 'No Prescription Uploaded'}
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto leading-relaxed">
+                    {lang === 'hi'
+                      ? 'VDA आपकी पुरानी स्वास्थ्य जानकारी का उपयोग नहीं करता है। अपनी डॉक्टर की पर्ची अपलोड करें ताकि आपकी दवाइयां और समय अनुसार रिमाइंडर यहाँ दिख सकें।'
+                      : 'VDA strictly uses only your uploaded doctor prescription for medication advice. Please upload your prescription to view your medicines and daily reminders here.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => recordsFileInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition-all shadow-md active:scale-95"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>{lang === 'hi' ? 'पर्ची अपलोड करें' : 'Upload Prescription'}</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
 
-        {/* 2. AAROGYA SETU 2.0 VISUAL PILL BOX (RURAL / ILLITERATE ACCESSIBLE) */}
+        {/* 2. VISUAL PILL BOX (Prescription-Derived) */}
         {activeSection === 'pillbox' && (
           <div className="space-y-3">
             <div className="p-4 rounded-2xl bg-gradient-to-tr from-emerald-950 via-slate-900 to-blue-950 border border-emerald-500/40 space-y-1">
@@ -320,81 +409,76 @@ export const RecordsTab: React.FC<RecordsTabProps> = ({
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
                 <span>{getTranslation(lang, 'visualPillBoxTitle')}</span>
               </h3>
-              <p className="text-[11px] text-slate-300">{getTranslation(lang, 'visualPillBoxSub')}</p>
+              <p className="text-[11px] text-slate-300">
+                {latestRx
+                  ? (lang === 'hi' ? 'आपकी पर्ची अनुसार दवाओं के समय' : 'Medicine timings from your uploaded prescription')
+                  : getTranslation(lang, 'visualPillBoxSub')}
+              </p>
             </div>
 
-            {/* Time Slot Groups */}
-            {[
-              { slot: 'morning', title: getTranslation(lang, 'morningSlot'), icon: Sunrise, color: 'text-amber-400', time: '08:00 AM' },
-              { slot: 'afternoon', title: getTranslation(lang, 'afternoonSlot'), icon: Sun, color: 'text-yellow-300', time: '01:30 PM' },
-              { slot: 'night', title: getTranslation(lang, 'nightSlot'), icon: Moon, color: 'text-sky-300', time: '09:30 PM' }
-            ].map((slotInfo) => {
-              const SlotIcon = slotInfo.icon;
-              return (
-                <div key={slotInfo.slot} className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 space-y-2.5">
-                  <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-                    <div className="flex items-center gap-2">
-                      <div className="p-1.5 rounded-lg bg-slate-800">
-                        <SlotIcon className={`w-4 h-4 ${slotInfo.color}`} />
-                      </div>
-                      <span className="text-xs font-bold text-white">{slotInfo.title}</span>
-                    </div>
-                    <span className="text-[10px] font-mono text-slate-400">{slotInfo.time}</span>
-                  </div>
-
-                  {/* Pills inside slot */}
-                  <div className="space-y-2">
-                    {medications.map((med, idx) => {
-                      const visual = getPillVisual(med.name, idx);
-                      const medName = getLocalizedField(med, 'name', lang);
-                      const medTiming = getLocalizedField(med, 'timing', lang);
-                      const isSpeaking = speakingId === `pill-${med.id}`;
-
-                      return (
-                        <div
-                          key={med.id}
-                          className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800/80 gap-3"
-                        >
-                          {/* Visual Pill Metaphor */}
-                          <div className="flex items-center gap-3 flex-1">
-                            <div className={`flex items-center justify-center text-[10px] shadow-md flex-shrink-0 ${visual.shape}`}>
-                              {visual.label}
-                            </div>
-                            <div>
-                              <h4 className="text-xs font-bold text-white">{medName}</h4>
-                              <p className="text-[10px] text-slate-400">{getLocalizedField(med, 'dosage', lang)} • {medTiming}</p>
-                            </div>
-                          </div>
-
-                          {/* Action Buttons */}
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              onClick={() => handleSpeak(`pill-${med.id}`, `${medName}. ${getLocalizedField(med, 'dosage', lang)}. ${medTiming}`)}
-                              className="p-2 rounded-lg bg-slate-800 text-emerald-400 hover:bg-slate-700 transition-colors"
-                              title={getTranslation(lang, 'pillAudioGuide')}
-                            >
-                              <Volume2 className="w-3.5 h-3.5" />
-                            </button>
-
-                            <button
-                              onClick={() => onToggleMedicationTaken(med.id)}
-                              className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1 transition-all ${
-                                med.takenToday
-                                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                                  : 'bg-emerald-500 text-slate-950 font-black shadow-md shadow-emerald-950 active:scale-95'
-                              }`}
-                            >
-                              <Check className="w-3.5 h-3.5" />
-                              <span>{med.takenToday ? getTranslation(lang, 'pillTakenDone') : getTranslation(lang, 'takePillNow')}</span>
-                            </button>
-                          </div>
+            {latestRx && latestRx.medications.length > 0 ? (
+              /* Time Slot Groups based on prescription */
+              [
+                { slot: 'morning', title: getTranslation(lang, 'morningSlot'), icon: Sunrise, color: 'text-amber-400', time: '08:00 AM' },
+                { slot: 'afternoon', title: getTranslation(lang, 'afternoonSlot'), icon: Sun, color: 'text-yellow-300', time: '01:30 PM' },
+                { slot: 'night', title: getTranslation(lang, 'nightSlot'), icon: Moon, color: 'text-sky-300', time: '09:00 PM' }
+              ].map((slotInfo) => {
+                const SlotIcon = slotInfo.icon;
+                return (
+                  <div key={slotInfo.slot} className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 space-y-2.5">
+                    <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 rounded-lg bg-slate-800">
+                          <SlotIcon className={`w-4 h-4 ${slotInfo.color}`} />
                         </div>
-                      );
-                    })}
+                        <span className="text-xs font-bold text-white">{slotInfo.title}</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-400">{slotInfo.time}</span>
+                    </div>
+
+                    <div className="space-y-2">
+                      {latestRx.medications.map((med, idx) => {
+                        const visual = getPillVisual(med.name, idx);
+                        const medName = lang === 'hi' && med.nameHi ? med.nameHi : med.name;
+
+                        return (
+                          <div
+                            key={med.id}
+                            className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800/80 gap-3"
+                          >
+                            <div className="flex items-center gap-3 flex-1">
+                              <div className={`flex items-center justify-center text-[10px] shadow-md flex-shrink-0 ${visual.shape}`}>
+                                {visual.label}
+                              </div>
+                              <div>
+                                <h4 className="text-xs font-bold text-white">{medName}</h4>
+                                <p className="text-[10px] text-slate-400">{med.dosage} • {med.timings.join(', ')}</p>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            ) : (
+              <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 text-center space-y-3">
+                <p className="text-xs text-slate-400">
+                  {lang === 'hi'
+                    ? 'पर्ची अपलोड करने पर आपकी दवाओं का विजुअल पिल बॉक्स यहाँ दिखाई देगा।'
+                    : 'Upload your prescription to view your visual pill box schedule.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => recordsFileInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-500 text-slate-950 font-bold text-xs"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>{lang === 'hi' ? 'पर्ची अपलोड करें' : 'Upload Prescription'}</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
 

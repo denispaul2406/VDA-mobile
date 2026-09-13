@@ -2,11 +2,11 @@
  * VDA Mobile — EscalationModal Component Tests (P0 Safety-Critical UI)
  *
  * Validates:
- * - Connecting header and alert indicator
- * - Patient and clinician message rendering
- * - Fallback card and eSanjeevani action trigger
- * - Message form submission to clinician
- * - Nearby emergency facility list expansion
+ * - Direct emergency assistance screen (no clinician wait queue)
+ * - 108 and 102 Ambulance speed dial options
+ * - eSanjeevani teleconsultation action trigger
+ * - Nearby emergency facility list and toggle
+ * - Urgent emergency instructions and close action
  */
 import { describe, it, expect, vi } from 'vitest';
 import React from 'react';
@@ -14,16 +14,30 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { EscalationModal } from '../EscalationModal';
 import { ClinicalReviewState } from '../../types';
 
-describe('VDA Mobile — EscalationModal Component', () => {
+describe('VDA Mobile — EscalationModal Component (Direct Emergency Action)', () => {
   const baseReviewState: ClinicalReviewState = {
     reviewRequested: true,
-    teleconsultationOffered: false,
-    teleconsultationConfigured: false,
-    clinicalChatState: 'WAITING_FOR_CLINICIAN',
+    teleconsultationOffered: true,
+    teleconsultationConfigured: true,
+    clinicalChatState: 'CLINICIAN_DISCONNECTED',
     clinicianResponseDeadline: new Date(Date.now() + 30000),
     firstClinicianResponseAt: null,
     fallbackShownAt: null,
-    nearbyFacilities: [],
+    nearbyFacilities: [
+      {
+        name: 'District Hospital Sitapur',
+        state: 'Uttar Pradesh',
+        district: 'Sitapur',
+        city: 'Sitapur',
+        address: 'Station Road',
+        contactNumber: '+91 5862 242200',
+        hospitalType: 'District Hospital',
+        schemes: ['PMJAY'],
+        emergencyCapabilityVerified: true,
+        distanceKm: 2.8,
+        travelTimeMinutes: 10,
+      },
+    ],
     messages: [
       {
         speaker: 'PATIENT',
@@ -33,86 +47,49 @@ describe('VDA Mobile — EscalationModal Component', () => {
     ],
   };
 
-  it('should render connecting notice when waiting for clinician', () => {
+  it('should render emergency guidance and reported symptoms directly without clinician waiting queue', () => {
     render(
       <EscalationModal
         review={baseReviewState}
         emergencyInstruction="Please remain calm and call 108"
         lang="en"
-        onSendMessageToClinician={vi.fn()}
         onOpenTeleconsultation={vi.fn()}
       />
     );
 
-    expect(screen.getByText(/Clinical assistance/i)).toBeInTheDocument();
-    expect(screen.getByText(/Connecting to the clinical team/i)).toBeInTheDocument();
+    expect(screen.getByText(/Clinical Assistance & Emergency/i)).toBeInTheDocument();
     expect(screen.getByText('I have severe chest pain')).toBeInTheDocument();
-    expect(screen.getByText(/If your condition is serious or getting worse/i)).toBeInTheDocument();
+    expect(screen.getByText(/Please remain calm and call 108/i)).toBeInTheDocument();
   });
 
-  it('should render connected state when clinician responds', () => {
-    const connectedState: ClinicalReviewState = {
-      ...baseReviewState,
-      clinicalChatState: 'CLINICIAN_CONNECTED',
-      firstClinicianResponseAt: new Date(),
-      messages: [
-        ...baseReviewState.messages,
-        {
-          speaker: 'CLINICIAN',
-          text: 'Hello, this is Dr. Sharma. Are you with someone right now?',
-          createdAt: new Date(),
-        },
-      ],
-    };
-
+  it('should directly render 108 and 102 ambulance calling options', () => {
     render(
       <EscalationModal
-        review={connectedState}
-        emergencyInstruction="Call 108 immediately"
+        review={baseReviewState}
         lang="en"
-        onSendMessageToClinician={vi.fn()}
         onOpenTeleconsultation={vi.fn()}
       />
     );
 
-    expect(screen.getByText(/Clinical team connected/i)).toBeInTheDocument();
-    expect(screen.getByText(/Hello, this is Dr. Sharma/i)).toBeInTheDocument();
+    expect(screen.getByText('108')).toBeInTheDocument();
+    expect(screen.getAllByText(/Ambulance/i).length).toBeGreaterThan(0);
+    expect(screen.getByText('102')).toBeInTheDocument();
+
+    const ambulanceLink = screen.getByRole('link', { name: /108/i });
+    expect(ambulanceLink).toHaveAttribute('href', 'tel:108');
   });
 
-  it('should show fallback card with eSanjeevani button when teleconsultation is offered', () => {
-    const fallbackState: ClinicalReviewState = {
-      ...baseReviewState,
-      teleconsultationOffered: true,
-      nearbyFacilities: [
-        {
-          name: 'District Hospital Sitapur',
-          state: 'Uttar Pradesh',
-          district: 'Sitapur',
-          city: 'Sitapur',
-          address: 'Station Road',
-          contactNumber: '+91 5862 242200',
-          hospitalType: 'District Hospital',
-          schemes: ['PMJAY'],
-          emergencyCapabilityVerified: true,
-          distanceKm: 2.8,
-          travelTimeMinutes: 10,
-        },
-      ],
-    };
-
+  it('should directly render eSanjeevani option and trigger teleconsultation on click', () => {
     const mockOpenTeleconsultation = vi.fn();
 
     render(
       <EscalationModal
-        review={fallbackState}
-        emergencyInstruction="Emergency guidelines"
+        review={baseReviewState}
         lang="en"
-        onSendMessageToClinician={vi.fn()}
         onOpenTeleconsultation={mockOpenTeleconsultation}
       />
     );
 
-    expect(screen.getByText(/The clinical team has not joined yet/i)).toBeInTheDocument();
     const teleconsultBtn = screen.getByText(/Talk to eSanjeevani/i);
     expect(teleconsultBtn).toBeInTheDocument();
 
@@ -120,62 +97,38 @@ describe('VDA Mobile — EscalationModal Component', () => {
     expect(mockOpenTeleconsultation).toHaveBeenCalledTimes(1);
   });
 
-  it('should expand nearby facilities when toggle button is clicked', () => {
-    const fallbackState: ClinicalReviewState = {
-      ...baseReviewState,
-      teleconsultationOffered: true,
-      nearbyFacilities: [
-        {
-          name: 'AIIMS Trauma Centre',
-          state: 'Delhi',
-          district: 'New Delhi',
-          city: 'Delhi',
-          address: 'Ring Road',
-          contactNumber: '+91 11 26588500',
-          hospitalType: 'Apex Institute',
-          schemes: ['PMJAY'],
-          emergencyCapabilityVerified: true,
-          distanceKm: 5.2,
-          travelTimeMinutes: 15,
-        },
-      ],
-    };
-
+  it('should render nearby emergency facilities and allow expansion', () => {
     render(
       <EscalationModal
-        review={fallbackState}
-        emergencyInstruction="Emergency guidelines"
+        review={baseReviewState}
         lang="en"
-        onSendMessageToClinician={vi.fn()}
         onOpenTeleconsultation={vi.fn()}
       />
     );
 
-    const toggleBtn = screen.getByRole('button', { name: /Nearby hospitals/i });
-    fireEvent.click(toggleBtn);
+    expect(screen.getByText('District Hospital Sitapur')).toBeInTheDocument();
+    expect(screen.getByText(/Nearby Emergency Hospitals/i)).toBeInTheDocument();
 
-    expect(screen.getByText('AIIMS Trauma Centre')).toBeInTheDocument();
+    const toggleBtn = screen.getByRole('button', { name: /Show more/i });
+    expect(toggleBtn).toBeInTheDocument();
+    fireEvent.click(toggleBtn);
+    expect(screen.getByRole('button', { name: /Show fewer/i })).toBeInTheDocument();
   });
 
-  it('should submit patient reply to onSendMessageToClinician', async () => {
-    const mockSend = vi.fn().mockResolvedValue(undefined);
+  it('should call onClose when dismiss button is clicked', () => {
+    const mockClose = vi.fn();
 
     render(
       <EscalationModal
         review={baseReviewState}
-        emergencyInstruction="Emergency guidelines"
         lang="en"
-        onSendMessageToClinician={mockSend}
+        onClose={mockClose}
         onOpenTeleconsultation={vi.fn()}
       />
     );
 
-    const input = screen.getByPlaceholderText(/Write a message to the clinical team/i);
-    fireEvent.change(input, { target: { value: 'My brother is here with me' } });
-
-    const submitBtn = screen.getByRole('button', { name: '' }); // Send button
-    fireEvent.submit(input.closest('form')!);
-
-    expect(mockSend).toHaveBeenCalledWith('My brother is here with me');
+    const dismissBtn = screen.getByRole('button', { name: /Dismiss/i });
+    fireEvent.click(dismissBtn);
+    expect(mockClose).toHaveBeenCalledTimes(1);
   });
 });

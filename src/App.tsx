@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { Sparkles, FileText, Building2, User } from 'lucide-react';
-import { ChatMessage, ClinicalFollowUp, ClinicalReviewState, FhirCondition, FhirDocument, FhirMedication, FhirObservation, FollowUpProgress, LanguageCode, PatientDemographics } from './types';
+import { ChatMessage, ClinicalReviewState, FhirCondition, FhirDocument, FhirMedication, FhirObservation, LanguageCode, PatientDemographics } from './types';
 import { SYNTHETIC_PATIENTS, FACILITIES_LIST, HEALTH_SCHEMES_LIST } from './data/syntheticData';
 import { getTranslation, playChime } from './utils/i18n';
 import { apiService } from './services/api';
+import { createLocalPrescriptionFromUpload } from './utils/localMedicationStorage';
 
 // Tab & Modal Components
 import { OnboardingModal } from './components/OnboardingModal';
@@ -24,8 +25,6 @@ export default function App() {
 
   // Backend VDA Session State
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [clinicalFollowUps, setClinicalFollowUps] = useState<ClinicalFollowUp[]>([]);
-  const [followUpProgress, setFollowUpProgress] = useState<FollowUpProgress>({ completedFollowUpCount: 0 });
 
   // App Flow Modals
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
@@ -49,9 +48,6 @@ export default function App() {
       const sessionRes = await apiService.createPatientSession(currentPersonaKey);
       if (sessionRes?.session_id) {
         setActiveSessionId(sessionRes.session_id);
-        const followUpResponse = await apiService.getClinicalFollowUps(sessionRes.session_id);
-        setClinicalFollowUps(followUpResponse.followUps);
-        setFollowUpProgress(followUpResponse.progress || { completedFollowUpCount: 0 });
       }
     };
     initAppSession();
@@ -111,13 +107,8 @@ export default function App() {
     const sessionRes = await apiService.createPatientSession(key);
     if (sessionRes?.session_id) {
       setActiveSessionId(sessionRes.session_id);
-      const followUpResponse = await apiService.getClinicalFollowUps(sessionRes.session_id);
-      setClinicalFollowUps(followUpResponse.followUps);
-      setFollowUpProgress(followUpResponse.progress || { completedFollowUpCount: 0 });
     } else {
       setActiveSessionId(null);
-      setClinicalFollowUps([]);
-      setFollowUpProgress({ completedFollowUpCount: 0 });
     }
 
     setMessages([
@@ -194,6 +185,10 @@ export default function App() {
       }
     }
 
+    if (attachmentFile) {
+      createLocalPrescriptionFromUpload(attachmentFile.name, undefined, attachmentInfo?.url);
+    }
+
     if (attachmentFile && currentSessionId) {
       try {
         await apiService.uploadPrescription(currentSessionId, attachmentFile);
@@ -232,14 +227,7 @@ export default function App() {
     }
   };
 
-  const handleClinicalFollowUpAttendance = async (followUpId: string, attended: boolean) => {
-    if (!activeSessionId) throw new Error('NO_ACTIVE_SESSION');
-    const result = await apiService.recordClinicalFollowUpAttendance(activeSessionId, followUpId, attended);
-    const followUpResponse = await apiService.getClinicalFollowUps(activeSessionId);
-    setClinicalFollowUps(followUpResponse.followUps);
-    setFollowUpProgress(followUpResponse.progress || { completedFollowUpCount: 0 });
-    return result.message;
-  };
+
 
   // Trigger manual or test escalation
   // The test control now sends the same input through the backend SafetyGate.
@@ -310,13 +298,14 @@ export default function App() {
           lang={lang}
         />
 
-        {/* Clinical Escalation Full-Screen Takeover */}
+        {/* Direct Emergency Action Modal (Ambulance 108, eSanjeevani, Nearby Hospitals) */}
         {clinicalReview?.reviewRequested && (
           <EscalationModal
             review={clinicalReview}
             lang={lang}
             onSendMessageToClinician={handleClinicalMessage}
             onOpenTeleconsultation={openTeleconsultation}
+            onClose={() => setClinicalReview(null)}
           />
         )}
 
@@ -329,15 +318,12 @@ export default function App() {
               observations={observations}
               lang={lang}
               messages={messages}
-              clinicalFollowUps={clinicalFollowUps}
-              followUpProgress={followUpProgress}
               isProcessing={isProcessingMessage}
               onSendMessage={handleSendMessage}
               onToggleMedicationTaken={handleToggleMedication}
               onNavigateTab={setActiveTab}
               onTriggerEscalation={handleTriggerEscalation}
               onOpenLogVital={() => setIsLogVitalOpen(true)}
-              onRecordClinicalFollowUpAttendance={handleClinicalFollowUpAttendance}
             />
           )}
 

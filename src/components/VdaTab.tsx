@@ -1,9 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, Send, Volume2, VolumeX, Pill, Activity, Building2, Award, AlertTriangle, QrCode, ShieldAlert, Sparkles, CheckCircle2, Phone, Paperclip, FileText, X, LoaderCircle } from 'lucide-react';
+import { Mic, MicOff, Send, Volume2, VolumeX, Pill, Activity, Building2, Award, AlertTriangle, QrCode, ShieldAlert, Sparkles, CheckCircle2, Phone, Paperclip, FileText, X, LoaderCircle, Star, Flame, Clock } from 'lucide-react';
 import { ChatMessage, ClinicalFollowUp, FollowUpProgress, FhirMedication, FhirObservation, LanguageCode, PatientDemographics } from '../types';
 import { getTranslation, playChime, getLocalizedField } from '../utils/i18n';
 import { getChatMessageText, getQuickActionLabel, getCardTitle } from '../utils/vdaEngine';
 import { apiService } from '../services/api';
+import {
+  LocalMedicineReminder,
+  LocalGamificationState,
+  LocalPrescription,
+  GamificationBadge,
+  getTodayMedicineReminders,
+  getGamificationState,
+  getLatestLocalPrescription,
+  toggleReminderTaken,
+  createLocalPrescriptionFromUpload,
+} from '../utils/localMedicationStorage';
+import { EmergencyActionModal } from './EmergencyActionModal';
 
 interface VdaTabProps {
   patient: PatientDemographics;
@@ -11,109 +23,16 @@ interface VdaTabProps {
   observations: FhirObservation[];
   lang: LanguageCode;
   messages: ChatMessage[];
-  clinicalFollowUps: ClinicalFollowUp[];
-  followUpProgress: FollowUpProgress;
+  clinicalFollowUps?: ClinicalFollowUp[];
+  followUpProgress?: FollowUpProgress;
   isProcessing: boolean;
   onSendMessage: (text: string, file?: File) => void;
-  onToggleMedicationTaken: (medId: string) => void;
+  onToggleMedicationTaken?: (medId: string) => void;
   onNavigateTab: (tab: 'vda' | 'records' | 'facilities' | 'profile') => void;
   onTriggerEscalation: (reason: string) => void;
   onOpenLogVital: () => void;
-  onRecordClinicalFollowUpAttendance: (followUpId: string, attended: boolean) => Promise<string>;
+  onRecordClinicalFollowUpAttendance?: (followUpId: string, attended: boolean) => Promise<string>;
 }
-
-type FollowUpCopy = { heading: string; message: string; question?: string; supporting?: string };
-
-const patientConditionLabel = (followUp: ClinicalFollowUp, lang: LanguageCode): string | null => {
-  const source = `${followUp.condition || ''} ${followUp.title || ''}`.toLowerCase();
-  const hindi = lang === 'hi';
-  if (/diabetes|t2dm|mellitus/.test(source)) return hindi ? 'डायबिटीज़' : 'diabetes';
-  if (/hypertension|htn|blood pressure|bp/.test(source)) return hindi ? 'बीपी' : 'blood pressure';
-  if (/ckd|renal|nephropathy|kidney/.test(source)) return hindi ? 'किडनी' : 'kidney';
-  if (/cad|coronary|heart|cardiac/.test(source)) return hindi ? 'दिल' : 'heart';
-  return null;
-};
-
-const localizedFollowUpDate = (dueDate: string, lang: LanguageCode): string => {
-  const locale = lang === 'hi' ? 'hi-IN' : lang === 'ta' ? 'ta-IN' : lang === 'kn' ? 'kn-IN' : 'en-IN';
-  return new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'long' })
-    .format(new Date(`${dueDate}T12:00:00+05:30`));
-};
-
-const followUpCopy = (followUp: ClinicalFollowUp, lang: LanguageCode): FollowUpCopy => {
-  const isHindi = lang === 'hi';
-  const condition = patientConditionLabel(followUp, lang);
-  const checkup = isHindi ? (condition ? `${condition} का चेकअप` : 'चेकअप') : (condition ? `${condition} check-up` : 'check-up');
-  const checkupName = isHindi ? (condition ? `${condition} चेकअप` : 'चेकअप') : checkup;
-  const date = localizedFollowUpDate(followUp.dueDate, lang);
-
-  if (followUp.status === 'ATTENDANCE_CHECK') {
-    return isHindi
-      ? { heading: 'VDA साथी की एक छोटी सी बात', message: `कल आपका ${checkup} था। क्या आप चेकअप कराने गए थे?` }
-      : { heading: 'A quick reminder from VDA Saathi', message: `Your ${checkup} was yesterday. Were you able to go?` };
-  }
-  if (followUp.status === 'DUE_TODAY') {
-    return isHindi
-      ? { heading: 'आज आपके लिए', message: `आज आपका ${checkupName} है।`, question: 'क्या आप आज चेकअप कराने जा रहे हैं?' }
-      : { heading: 'For you today', message: `Your ${checkup} is today.`, question: 'Are you planning to go for your check-up today?' };
-  }
-  if (followUp.status === 'DUE_TOMORROW') {
-    return isHindi
-      ? { heading: 'कल का रिमाइंडर', message: `कल आपको ${checkup} कराने जाना है।`, supporting: 'समय पर जाना याद रखें।' }
-      : { heading: 'Tomorrow’s reminder', message: `Your ${checkup} is tomorrow.`, supporting: 'Please remember to go on time.' };
-  }
-  if (followUp.dateSource === 'DERIVED_30_DAY') {
-    return isHindi
-      ? { heading: 'चेकअप की याद दिलाने वाली बात', message: `आपकी पिछली जाँच को लगभग 30 दिन हो गए हैं। ${checkup} ${date} के आसपास कराना अच्छा रहेगा।` }
-      : { heading: 'Check-up reminder', message: `It has been about 30 days since your previous visit. A ${checkup} may be useful around ${date}.` };
-  }
-  return isHindi
-    ? { heading: 'चेकअप की याद दिलाने वाली बात', message: `आपका ${checkup} ${date} को है।`, supporting: 'चेकअप के लिए समय पर जाना याद रखें।' }
-    : { heading: 'Check-up reminder', message: `Your ${checkup} is on ${date}.`, supporting: 'Please remember to go on time.' };
-};
-
-const followUpSpeechText = (followUp: ClinicalFollowUp, lang: LanguageCode): string => {
-  const copy = followUpCopy(followUp, lang);
-  return [copy.message, copy.question, copy.supporting].filter(Boolean).join(' ');
-};
-
-const attendanceFeedbackCopy = (followUp: ClinicalFollowUp, attended: boolean, lang: LanguageCode): string => {
-  if (lang === 'hi') {
-    return attended
-      ? '🎉 बहुत बढ़िया! आपने अपना चेकअप पूरा किया। नियमित चेकअप आपकी सेहत पर नज़र रखने में मदद करता है। स्वास्थ्य लक्ष्य पूरा।'
-      : 'कोई बात नहीं। चेकअप कराना आपकी सेहत की निगरानी के लिए जरूरी है। जब संभव हो, अपना चेकअप दोबारा तय कर लें।';
-  }
-  return attended
-    ? '🎉 Well done! You completed your check-up. Regular check-ups help you keep track of your health. Health goal completed.'
-    : 'That is okay. Check-ups help monitor your health. Please arrange your check-up again when practical.';
-};
-
-const followUpIntentConfirmation = (lang: LanguageCode) => lang === 'hi'
-  ? {
-      title: 'बहुत बढ़िया!',
-      message: 'आपने आज के चेकअप के लिए जाने की पुष्टि की है।',
-      supporting: 'समय पर चेकअप कराना आपकी सेहत पर नज़र रखने में मदद करता है।',
-      goal: 'आज का स्वास्थ्य लक्ष्य तैयार',
-      spokenText: 'बहुत बढ़िया। समय पर चेकअप कराना आपकी सेहत पर नज़र रखने में मदद करता है।',
-    }
-  : {
-      title: 'Great!',
-      message: 'You have confirmed that you plan to go for today’s check-up.',
-      supporting: 'Timely check-ups help you keep track of your health.',
-      goal: 'Today’s health goal is set',
-      spokenText: 'That is great. Timely check-ups help you keep track of your health.',
-    };
-
-const healthProgressCopy = (completedCount: number, lang: LanguageCode) => {
-  if (completedCount === 0) {
-    return lang === 'hi'
-      ? { title: 'अपनी सेहत की नियमित देखभाल शुरू करें', description: 'पहला चेकअप पूरा करने पर आपकी प्रगति यहाँ दिखाई देगी।', achievement: 'आपका पहला स्वास्थ्य लक्ष्य' }
-      : { title: 'Start your regular health care journey', description: 'Your progress will appear here after your first completed check-up.', achievement: 'Your first health goal' };
-  }
-  return lang === 'hi'
-    ? { title: 'आप अपनी सेहत की अच्छी देखभाल कर रहे हैं!', description: completedCount === 1 ? '🎉 पहला स्वास्थ्य लक्ष्य पूरा' : `${completedCount} नियमित चेकअप पूरे`, achievement: `अगला लक्ष्य: ${completedCount + 1} नियमित चेकअप` }
-    : { title: 'You are taking good care of your health!', description: completedCount === 1 ? '🎉 First health goal completed' : `${completedCount} regular check-ups completed`, achievement: `Next goal: ${completedCount + 1} regular check-ups` };
-};
 
 export const VdaTab: React.FC<VdaTabProps> = ({
   patient,
@@ -136,11 +55,13 @@ export const VdaTab: React.FC<VdaTabProps> = ({
   const [speechTranscript, setSpeechTranscript] = useState('');
   const [voiceError, setVoiceError] = useState('');
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
-  const [showEmergencyDial, setShowEmergencyDial] = useState(false);
-  const [followUpBusyId, setFollowUpBusyId] = useState<string | null>(null);
-  const [followUpFeedback, setFollowUpFeedback] = useState('');
-  const [followUpIntentIds, setFollowUpIntentIds] = useState<Set<string>>(() => new Set());
-  const [pendingFollowUpConfirmationIds, setPendingFollowUpConfirmationIds] = useState<Set<string>>(() => new Set());
+  const [showEmergencyModal, setShowEmergencyModal] = useState(false);
+
+  // Local prescription reminders & light gamification (no penalties)
+  const [localReminders, setLocalReminders] = useState<LocalMedicineReminder[]>(() => getTodayMedicineReminders());
+  const [gamification, setGamification] = useState<LocalGamificationState>(() => getGamificationState());
+  const [latestPrescription, setLatestPrescription] = useState<LocalPrescription | null>(() => getLatestLocalPrescription());
+  const [celebrationToast, setCelebrationToast] = useState<{ message: string; badge?: GamificationBadge } | null>(null);
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -150,8 +71,6 @@ export const VdaTab: React.FC<VdaTabProps> = ({
   const voiceTurnStartedRef = useRef(false);
   const playbackRef = useRef<HTMLAudioElement | null>(null);
   const audioBusyRef = useRef(false);
-  const spokenFollowUpIdsRef = useRef<Set<string>>(new Set());
-  const spokenFollowUpConfirmationIdsRef = useRef<Set<string>>(new Set());
   const lastAutoSpokenMessageId = useRef<string | null>(messages[messages.length - 1]?.sender === 'vda' ? messages[messages.length - 1].id : null);
 
   // Auto-scroll chat to latest message
@@ -233,46 +152,6 @@ export const VdaTab: React.FC<VdaTabProps> = ({
   const playResponseAudio = async (msg: ChatMessage) => {
     await playTextAudio(msg.id, getChatMessageText(msg, lang));
   };
-
-  const playFollowUpAudio = async (followUp: ClinicalFollowUp) => {
-    await playTextAudio(`follow-up-${followUp.id}`, followUpSpeechText(followUp, lang));
-  };
-
-  const playFollowUpConfirmationAudio = async (followUp: ClinicalFollowUp) => {
-    await playTextAudio(`follow-up-confirmation-${followUp.id}`, followUpIntentConfirmation(lang).spokenText);
-  };
-
-  // A reminder is spoken at most once for each follow-up during this mounted session.
-  // It waits until no response audio, recording, transcription, or VDA turn is active.
-  useEffect(() => {
-    if (isProcessing || voiceState !== 'idle' || speakingMsgId || audioBusyRef.current) return;
-    const followUp = clinicalFollowUps.find((item) => (
-      !spokenFollowUpIdsRef.current.has(item.id) && !followUpIntentIds.has(item.id)
-    ));
-    if (!followUp) return;
-
-    spokenFollowUpIdsRef.current.add(followUp.id);
-    void playFollowUpAudio(followUp);
-  }, [clinicalFollowUps, followUpIntentIds, isProcessing, lang, speakingMsgId, voiceState]);
-
-  // The planned-attendance confirmation is distinct from actual attendance. It is
-  // queued until existing voice/STT activity is idle, and can only auto-play once.
-  useEffect(() => {
-    if (isProcessing || voiceState !== 'idle' || speakingMsgId || audioBusyRef.current) return;
-    const followUp = clinicalFollowUps.find((item) => (
-      pendingFollowUpConfirmationIds.has(item.id)
-      && !spokenFollowUpConfirmationIdsRef.current.has(item.id)
-    ));
-    if (!followUp) return;
-
-    spokenFollowUpConfirmationIdsRef.current.add(followUp.id);
-    setPendingFollowUpConfirmationIds((previous) => {
-      const next = new Set(previous);
-      next.delete(followUp.id);
-      return next;
-    });
-    void playFollowUpConfirmationAudio(followUp);
-  }, [clinicalFollowUps, isProcessing, lang, pendingFollowUpConfirmationIds, speakingMsgId, voiceState]);
 
   const stopRecording = (cancel = false) => {
     if (!recorderRef.current) return;
@@ -356,32 +235,36 @@ export const VdaTab: React.FC<VdaTabProps> = ({
 
   const handleSpeakMessage = (msg: ChatMessage) => { void playResponseAudio(msg); };
 
-  const recordFollowUpAttendance = async (followUp: ClinicalFollowUp, attended: boolean) => {
-    setFollowUpBusyId(followUp.id);
-    setFollowUpFeedback('');
-    try {
-      await onRecordClinicalFollowUpAttendance(followUp.id, attended);
-      setFollowUpFeedback(attendanceFeedbackCopy(followUp, attended, lang));
-    } catch {
-      setFollowUpFeedback(lang === 'hi' ? 'फॉलो-अप स्थिति अपडेट नहीं हो सकी। कृपया बाद में फिर प्रयास करें।' : 'Unable to update the follow-up status. Please try again later.');
-    } finally {
-      setFollowUpBusyId(null);
+  // Synchronization hook to refresh local prescription & reminders
+  useEffect(() => {
+    setLocalReminders(getTodayMedicineReminders());
+    setGamification(getGamificationState());
+    setLatestPrescription(getLatestLocalPrescription());
+  }, [messages]);
+
+  const handleToggleReminderDose = (reminderId: string) => {
+    const result = toggleReminderTaken(reminderId);
+    setLocalReminders(getTodayMedicineReminders());
+    setGamification(result.gamification);
+
+    if (result.reminder?.taken) {
+      playChime('success');
+      if (result.newlyEarnedBadge) {
+        setCelebrationToast({
+          message: lang === 'hi'
+            ? `🎉 नया तमगा अनलॉक: ${result.newlyEarnedBadge.nameHi}!`
+            : `🎉 New Badge Unlocked: ${result.newlyEarnedBadge.name}!`,
+          badge: result.newlyEarnedBadge,
+        });
+      } else {
+        setCelebrationToast({
+          message: lang === 'hi'
+            ? '⭐ शाबाश! आपने दवा समय पर ली। (+1 स्टार)'
+            : '⭐ Great job taking your medicine on time! (+1 star)',
+        });
+      }
+      setTimeout(() => setCelebrationToast(null), 3500);
     }
-  };
-
-  const confirmFollowUpIntent = (followUp: ClinicalFollowUp) => {
-    setFollowUpIntentIds((previous) => new Set(previous).add(followUp.id));
-    setFollowUpFeedback('');
-    setPendingFollowUpConfirmationIds((previous) => new Set(previous).add(followUp.id));
-  };
-
-  const acknowledgeFollowUp = (followUp: ClinicalFollowUp) => {
-    setFollowUpIntentIds((previous) => new Set(previous).add(followUp.id));
-  };
-
-  const openFollowUpFacilities = () => {
-    // Reuses the existing facility tab; no VDA turn or new facility lookup is created here.
-    onNavigateTab('facilities');
   };
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -429,6 +312,14 @@ export const VdaTab: React.FC<VdaTabProps> = ({
     e.preventDefault();
     if (!inputText.trim() && !selectedFile) return;
     const textToSend = inputText.trim() || (selectedFile ? `[Prescription Attachment: ${selectedFile.name}]` : '');
+
+    if (selectedFile) {
+      createLocalPrescriptionFromUpload(selectedFile.name, undefined, filePreviewUrl || undefined);
+      setLocalReminders(getTodayMedicineReminders());
+      setGamification(getGamificationState());
+      setLatestPrescription(getLatestLocalPrescription());
+    }
+
     onSendMessage(textToSend, selectedFile || undefined);
     setInputText('');
     setSpeechTranscript('');
@@ -484,12 +375,6 @@ export const VdaTab: React.FC<VdaTabProps> = ({
   const patientDistrict = getLocalizedField(patient, 'district', lang);
   const patientState = getLocalizedField(patient, 'state', lang);
 
-  const completedFollowUpCount = followUpProgress.completedFollowUpCount;
-  const progressCopy = healthProgressCopy(completedFollowUpCount, lang);
-  const progressMilestones = completedFollowUpCount === 0
-    ? [1, 2, 3]
-    : Array.from({ length: 3 }, (_, index) => Math.max(1, completedFollowUpCount - 1) + index);
-
   return (
     <div className="flex-1 flex flex-col h-full bg-slate-950 overflow-hidden relative">
       {/* Top Header */}
@@ -512,10 +397,11 @@ export const VdaTab: React.FC<VdaTabProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5 flex-shrink-0">
-          {/* Emergency Quick Dial Trigger */}
+          {/* Direct Emergency Quick Dial Trigger */}
           <button
-            onClick={() => setShowEmergencyDial(!showEmergencyDial)}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-400 text-xs font-bold transition-all active:scale-95 whitespace-nowrap"
+            id="emergency-sos-btn"
+            onClick={() => setShowEmergencyModal(true)}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-400 text-xs font-bold transition-all active:scale-95 whitespace-nowrap"
             title="Emergency Speed Dial (24x7)"
           >
             <Phone className="w-3.5 h-3.5" />
@@ -541,32 +427,155 @@ export const VdaTab: React.FC<VdaTabProps> = ({
         ref={chatScrollRef}
         className="flex-1 overflow-y-auto px-3.5 sm:px-4 py-3.5 space-y-3.5 scroll-smooth min-h-0"
       >
-        {/* Real completed clinical follow-ups only; no medication adherence or inferred monthly streak. */}
-        <section className="rounded-2xl border border-emerald-500/35 bg-gradient-to-r from-emerald-950/75 via-slate-900 to-teal-950/70 p-3.5 shadow-lg" aria-label="Health progress">
-          <div className="flex items-start gap-2.5">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-300">
-              <Activity className="h-5 w-5" />
+        {/* Medicine Reminders & Light Gamification Card (Prescription-Derived, Penalty-Free) */}
+        <section
+          className="rounded-2xl border border-indigo-500/30 bg-gradient-to-r from-slate-900 via-indigo-950/40 to-slate-900 p-3.5 shadow-lg relative overflow-hidden"
+          aria-label="Medicine Reminders"
+        >
+          {/* Header & Gamification Stats */}
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-500/20 text-indigo-300">
+                <Pill className="h-4 w-4" />
+              </div>
+              <div>
+                <h2 className="text-xs sm:text-sm font-extrabold tracking-tight text-white flex items-center gap-1.5">
+                  <span>{lang === 'hi' ? 'दवाइयां और रिमाइंडर' : 'Medicine Reminders'}</span>
+                  {latestPrescription && (
+                    <span className="text-[10px] font-normal text-indigo-300 font-mono">
+                      ({latestPrescription.filename})
+                    </span>
+                  )}
+                </h2>
+                <p className="text-[10px] text-slate-400">
+                  {lang === 'hi'
+                    ? 'अपलोड की गई पर्ची के अनुसार समय'
+                    : 'Timings derived from your uploaded prescription'}
+                </p>
+              </div>
             </div>
-            <div className="min-w-0 flex-1">
-              <h2 className="text-sm font-extrabold tracking-tight text-white">{progressCopy.title}</h2>
-              <p className="mt-0.5 text-[11px] leading-relaxed text-emerald-100/85">{progressCopy.description}</p>
+
+            {/* Gamification Stats: Streak & Stars (Penalty-Free) */}
+            <div className="flex items-center gap-1.5">
+              <div
+                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-bold"
+                title={lang === 'hi' ? 'लगातार दवा लेने का नियम' : 'Consistency streak'}
+              >
+                <Flame className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+                <span>{gamification.streakDays} {lang === 'hi' ? 'दिन' : 'd'}</span>
+              </div>
+              <div
+                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold"
+                title={lang === 'hi' ? 'अर्जित सितारे' : 'Stars earned'}
+              >
+                <Star className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400" />
+                <span>{gamification.stars}</span>
+              </div>
             </div>
           </div>
-          <div className="mt-3 flex items-center gap-2" aria-label={`${completedFollowUpCount} completed checkups`}>
-            {progressMilestones.map((milestone, index) => {
-              const complete = milestone <= completedFollowUpCount;
-              const currentGoal = milestone === completedFollowUpCount + 1;
-              return <React.Fragment key={milestone}>
-                {index > 0 && <div className={`h-0.5 flex-1 ${complete ? 'bg-emerald-400' : 'bg-slate-700'}`} />}
-                <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold ${complete ? 'border-emerald-400 bg-emerald-500 text-slate-950' : currentGoal ? 'border-emerald-300 bg-emerald-500/15 text-emerald-200' : 'border-slate-600 bg-slate-900 text-slate-400'}`}>
-                  {complete ? '✓' : milestone}
+
+          {/* Encouraging Celebration Toast */}
+          {celebrationToast && (
+            <div className="mt-2.5 p-2 rounded-xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 border border-emerald-400/40 flex items-center gap-2 text-xs font-bold text-emerald-200 animate-pulse">
+              <span>{celebrationToast.badge ? celebrationToast.badge.icon : '⭐'}</span>
+              <span>{celebrationToast.message}</span>
+            </div>
+          )}
+
+          {/* Reminders List */}
+          {localReminders.length > 0 ? (
+            <div className="mt-3 space-y-2">
+              {localReminders.map((reminder) => (
+                <div
+                  key={reminder.id}
+                  className={`flex items-center justify-between p-2.5 rounded-xl border transition-all ${
+                    reminder.taken
+                      ? 'bg-emerald-950/25 border-emerald-500/30 text-emerald-200'
+                      : 'bg-slate-950/60 border-slate-800 text-slate-200 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="min-w-0 flex-1 pr-2">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-bold text-xs text-white">
+                        {lang === 'hi' && reminder.medicationNameHi
+                          ? reminder.medicationNameHi
+                          : reminder.medicationName}
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono">
+                        {reminder.dosage}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-2">
+                      <span className="font-semibold text-amber-300 flex items-center gap-1">
+                        <Clock className="w-3 h-3" /> {reminder.time}
+                      </span>
+                      <span>•</span>
+                      <span>{reminder.foodRelation}</span>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => handleToggleReminderDose(reminder.id)}
+                    className={`flex-shrink-0 px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 flex items-center gap-1 ${
+                      reminder.taken
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
+                        : 'bg-emerald-500 text-slate-950 hover:bg-emerald-400 shadow-md shadow-emerald-950'
+                    }`}
+                  >
+                    {reminder.taken ? (
+                      <>
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>{lang === 'hi' ? 'ली गई' : 'Taken'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Pill className="w-3.5 h-3.5" />
+                        <span>{lang === 'hi' ? 'दवा लें' : 'Take Dose'}</span>
+                      </>
+                    )}
+                  </button>
                 </div>
-              </React.Fragment>;
-            })}
-          </div>
-          <div className="mt-2 inline-flex rounded-lg bg-emerald-500/12 px-2.5 py-1 text-[11px] font-semibold text-emerald-200">
-            🏆 {progressCopy.achievement}
-          </div>
+              ))}
+
+              {/* Milestone Badges Bar */}
+              <div className="pt-1 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                {gamification.badges.map((b) => {
+                  const isUnlocked = !!b.unlockedAt;
+                  return (
+                    <div
+                      key={b.id}
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-semibold border whitespace-nowrap transition-colors ${
+                        isUnlocked
+                          ? 'bg-amber-500/15 border-amber-500/30 text-amber-200 shadow-sm'
+                          : 'bg-slate-950/40 border-slate-800/80 text-slate-500 opacity-50'
+                      }`}
+                      title={lang === 'hi' ? b.descriptionHi : b.description}
+                    >
+                      <span>{b.icon}</span>
+                      <span>{lang === 'hi' ? b.nameHi : b.name}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            /* Upload prescription prompt when no prescription is stored locally */
+            <div className="mt-2.5 p-3 rounded-xl bg-slate-950/60 border border-slate-800 text-center">
+              <p className="text-xs text-slate-300 leading-relaxed">
+                {lang === 'hi'
+                  ? 'अपनी डॉक्टर की पर्ची अपलोड करें ताकि VDA आपकी दवाइयां समझा सके और सही समय पर रिमाइंडर सेट कर सके।'
+                  : 'Upload your doctor’s prescription so VDA can explain your medicines in simple words and set timely reminders.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="mt-2.5 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition-all shadow-md active:scale-95"
+              >
+                <Paperclip className="w-3.5 h-3.5" />
+                <span>{lang === 'hi' ? 'पर्ची अपलोड करें' : 'Upload Prescription'}</span>
+              </button>
+            </div>
+          )}
         </section>
 
         {/* Message Bubble Stream */}
@@ -720,91 +729,6 @@ export const VdaTab: React.FC<VdaTabProps> = ({
                 </div>
               )}
 
-              {/* Passive follow-ups are contextual VDA reminders, not conversation turns. */}
-              {!isUser && index === 0 && (clinicalFollowUps.length > 0 || followUpFeedback) && (
-                <section className="w-full max-w-[85%] space-y-2" aria-label="Clinical follow-up reminders">
-                  {clinicalFollowUps.map((followUp) => {
-                    const copy = followUpCopy(followUp, lang);
-                    const isAcknowledged = followUpIntentIds.has(followUp.id);
-                    const isTodayIntentConfirmed = followUp.status === 'DUE_TODAY' && isAcknowledged;
-
-                    return (
-                      <div key={followUp.id} className="rounded-xl border border-emerald-500/25 bg-emerald-950/25 px-3 py-2.5 shadow-sm">
-                        <div className="flex items-start gap-2.5">
-                          <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-300">
-                            {isTodayIntentConfirmed ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            {isTodayIntentConfirmed ? (() => {
-                              const confirmation = followUpIntentConfirmation(lang);
-                              return <>
-                                <p className="text-xs font-bold text-emerald-200">✓ {confirmation.title}</p>
-                                <p className="mt-1 text-xs font-semibold leading-relaxed text-slate-100">{confirmation.message}</p>
-                                <p className="mt-1 text-[11px] leading-relaxed text-slate-300">{confirmation.supporting}</p>
-                                <div className="mt-2 inline-flex items-center rounded-lg bg-emerald-500/15 px-2.5 py-1 text-[11px] font-semibold text-emerald-200">
-                                  🏆 {confirmation.goal}
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => void playFollowUpConfirmationAudio(followUp)}
-                                  className="mt-2 flex items-center gap-1 text-[11px] font-semibold text-emerald-300 hover:text-emerald-200"
-                                >
-                                  <Volume2 className="h-3.5 w-3.5" />
-                                  <span>{lang === 'hi' ? 'सुनें' : 'Listen'}</span>
-                                </button>
-                              </>;
-                            })() : <>
-                              <p className="text-[10px] font-bold tracking-wide text-emerald-300">{copy.heading}</p>
-                              <p className="mt-1 text-xs font-semibold leading-relaxed text-slate-100">{copy.message}</p>
-                              {copy.question && <p className="mt-1 text-xs leading-relaxed text-slate-200">{copy.question}</p>}
-                              {copy.supporting && <p className="mt-0.5 text-[11px] leading-relaxed text-slate-300">{copy.supporting}</p>}
-
-                              {followUp.requiresAttendanceCheck ? (
-                              <div className="mt-2.5 flex flex-wrap gap-2">
-                                <button disabled={followUpBusyId === followUp.id} onClick={() => void recordFollowUpAttendance(followUp, true)} className="rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-bold text-slate-950 disabled:opacity-60">{lang === 'hi' ? 'हाँ, गया था' : 'Yes, I went'}</button>
-                                <button disabled={followUpBusyId === followUp.id} onClick={() => void recordFollowUpAttendance(followUp, false)} className="rounded-lg border border-amber-400/50 px-3 py-1.5 text-xs font-bold text-amber-100 disabled:opacity-60">{lang === 'hi' ? 'नहीं जा पाया' : 'I could not go'}</button>
-                              </div>
-                            ) : isAcknowledged ? (
-                              <p className="mt-2 text-[11px] font-semibold text-emerald-200">✓ {lang === 'hi' ? 'ठीक है, मैं आपको याद दिलाता रहूँगा।' : 'Okay, I will keep reminding you.'}</p>
-                            ) : (
-                              <div className="mt-2.5 flex flex-wrap gap-2">
-                                <button
-                                  onClick={() => followUp.status === 'DUE_TODAY' ? confirmFollowUpIntent(followUp) : acknowledgeFollowUp(followUp)}
-                                  className="rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-bold text-slate-950"
-                                >
-                                  {followUp.status === 'DUE_TODAY'
-                                    ? (lang === 'hi' ? 'हाँ, जाऊँगा' : 'Yes, I will go')
-                                    : followUp.status === 'DUE_TOMORROW'
-                                      ? (lang === 'hi' ? 'ठीक है' : 'Okay')
-                                      : (lang === 'hi' ? 'याद रखूँगा' : 'I will remember')}
-                                </button>
-                                <button
-                                  onClick={openFollowUpFacilities}
-                                  className="rounded-lg border border-emerald-400/45 px-3 py-1.5 text-xs font-bold text-emerald-100 hover:bg-emerald-500/10"
-                                >
-                                  {lang === 'hi' ? 'कहाँ जाना है?' : 'Where can I go?'}
-                                </button>
-                              </div>
-                            )}
-
-                            <button
-                              type="button"
-                              onClick={() => void playFollowUpAudio(followUp)}
-                              className="mt-2 flex items-center gap-1 text-[11px] font-semibold text-emerald-300 hover:text-emerald-200"
-                            >
-                              <Volume2 className="h-3.5 w-3.5" />
-                              <span>{lang === 'hi' ? 'सुनें' : 'Listen'}</span>
-                            </button>
-                            </>}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {followUpFeedback && <p className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs leading-relaxed text-emerald-100">{followUpFeedback}</p>}
-                </section>
-              )}
-
               {/* Quick Action Buttons */}
               {msg.quickActions && msg.quickActions.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mt-1.5">
@@ -826,6 +750,8 @@ export const VdaTab: React.FC<VdaTabProps> = ({
                           onSendMessage(getTranslation(lang, 'nearbyHospitalChip'));
                         } else if (qa.action === 'ask_scheme') {
                           onSendMessage(getTranslation(lang, 'pmjayBenefitsChip'));
+                        } else if (qa.action === 'attach_prescription') {
+                          fileInputRef.current?.click();
                         }
                       }}
                       className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 transition-all active:scale-95"
@@ -1031,89 +957,15 @@ export const VdaTab: React.FC<VdaTabProps> = ({
         </div>
       </div>
 
-      {/* SOS / Emergency Speed Dial Modal */}
-      {showEmergencyDial && (
-        <div className="absolute inset-0 z-50 bg-slate-950/95 backdrop-blur-md p-6 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
-                <Phone className="w-4 h-4 text-red-400" />
-                <span>{getTranslation(lang, 'emergencyDialTitle')}</span>
-              </h3>
-              <button
-                onClick={() => setShowEmergencyDial(false)}
-                className="text-xs px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300"
-              >
-                {getTranslation(lang, 'close')}
-              </button>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              <a
-                href="tel:108"
-                className="p-4 rounded-2xl bg-red-950/60 border border-red-500/40 flex items-center justify-between text-white hover:bg-red-900/50 transition-all"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl">🚑</span>
-                  <div>
-                    <h4 className="text-base font-extrabold">{getTranslation(lang, 'ambulance108')}</h4>
-                    <p className="text-xs text-red-300">National Ambulance Service</p>
-                  </div>
-                </div>
-                <Phone className="w-5 h-5 text-red-400" />
-              </a>
-
-              <a
-                href="tel:104"
-                className="p-4 rounded-2xl bg-emerald-950/60 border border-emerald-500/40 flex items-center justify-between text-white hover:bg-emerald-900/50 transition-all"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl">🩺</span>
-                  <div>
-                    <h4 className="text-base font-extrabold">{getTranslation(lang, 'healthHelpline104')}</h4>
-                    <p className="text-xs text-emerald-300">State Medical Advice & Tele-Triage</p>
-                  </div>
-                </div>
-                <Phone className="w-5 h-5 text-emerald-400" />
-              </a>
-
-              <a
-                href="tel:112"
-                className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-between text-white hover:bg-slate-850 transition-all"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl">🚨</span>
-                  <div>
-                    <h4 className="text-base font-extrabold">{getTranslation(lang, 'emergency112')}</h4>
-                    <p className="text-xs text-slate-400">All-in-One Emergency SOS</p>
-                  </div>
-                </div>
-                <Phone className="w-5 h-5 text-slate-300" />
-              </a>
-
-              <a
-                href="tel:14555"
-                className="p-4 rounded-2xl bg-amber-950/50 border border-amber-500/40 flex items-center justify-between text-white hover:bg-amber-900/50 transition-all"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl">💳</span>
-                  <div>
-                    <h4 className="text-base font-extrabold">{getTranslation(lang, 'ayushman14555')}</h4>
-                    <p className="text-xs text-amber-300">PM-JAY Health Coverage Helpline</p>
-                  </div>
-                </div>
-                <Phone className="w-5 h-5 text-amber-400" />
-              </a>
-            </div>
-          </div>
-
-          <button
-            onClick={() => setShowEmergencyDial(false)}
-            className="w-full py-3.5 rounded-2xl bg-slate-800 text-white font-bold text-sm"
-          >
-            {getTranslation(lang, 'done')}
-          </button>
-        </div>
+      {/* Direct Emergency Action Modal (Ambulance 108, eSanjeevani, Nearby Hospitals) */}
+      {showEmergencyModal && (
+        <EmergencyActionModal
+          lang={lang}
+          onClose={() => setShowEmergencyModal(false)}
+          onOpenTeleconsultation={async () => {
+            window.open('https://esanjeevani.mohfw.gov.in', '_blank');
+          }}
+        />
       )}
     </div>
   );
