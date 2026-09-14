@@ -237,6 +237,10 @@ export interface ChatMessage {
   textKn?: string;
   timestamp: string;
   isEscalationTrigger?: boolean;
+  /** Device-local prescription reminder workflow step; never sent to the backend. */
+  reminderStepId?: string;
+  /** Backend explanation restricted to the exact uploaded prescription, not FHIR data. */
+  prescriptionScoped?: boolean;
   quickActions?: { label: string; labelHi?: string; labelTa?: string; labelKn?: string; action: string; icon?: string }[];
   cardData?: {
     type: 'medication_reminder' | 'lab_highlight' | 'facility_qr' | 'scheme_summary' | 'vitals_logged';

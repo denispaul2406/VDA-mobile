@@ -1,29 +1,21 @@
 package in.gov.abdm.vdahealth;
 
 import android.content.Intent;
-import com.getcapacitor.JSObject;
+import android.net.Uri;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
-/** Opens only the known official eSanjeevani Android package, when installed. */
+/** Opens the official eSanjeevani patient sign-in page in an external browser. */
 @CapacitorPlugin(name = "EsanjeevaniLauncher")
 public class EsanjeevaniLauncherPlugin extends Plugin {
-    private static final String OFFICIAL_PACKAGE = "hied.esanjeevaniabopd.com";
+    private static final String OFFICIAL_URL = "https://esanjeevani.mohfw.gov.in/#/patient/signin";
 
     @PluginMethod
     public void open(PluginCall call) {
-        Intent launchIntent = getContext().getPackageManager().getLaunchIntentForPackage(OFFICIAL_PACKAGE);
-        JSObject result = new JSObject();
-        if (launchIntent == null) {
-            result.put("openedApp", false);
-            call.resolve(result);
-            return;
-        }
-        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        getContext().startActivity(launchIntent);
-        result.put("openedApp", true);
-        call.resolve(result);
+        Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(OFFICIAL_URL));
+        getActivity().startActivity(browserIntent);
+        call.resolve();
     }
 }

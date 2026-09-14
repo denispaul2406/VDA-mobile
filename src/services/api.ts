@@ -36,8 +36,8 @@ import { processVdaQuery, VdaProcessResult } from '../utils/vdaEngine';
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
 const USE_MOCK_FALLBACK = import.meta.env.VITE_ENABLE_MOCK_FALLBACK !== 'false';
-const ESANJEEVANI_OFFICIAL_URL = 'https://esanjeevani.mohfw.gov.in/';
-const EsanjeevaniLauncher = registerPlugin<{ open(): Promise<{ openedApp: boolean }> }>('EsanjeevaniLauncher');
+const ESANJEEVANI_OFFICIAL_URL = 'https://esanjeevani.mohfw.gov.in/#/patient/signin';
+const EsanjeevaniExternalLink = registerPlugin<{ open(): Promise<void> }>('EsanjeevaniLauncher');
 
 class ApiService {
   private authToken: string | null = null;
@@ -235,12 +235,14 @@ class ApiService {
     medications: FhirMedication[],
     observations: FhirObservation[],
     lang: LanguageCode,
-    sessionId?: string | null
+    sessionId?: string | null,
+    options?: { disableLocalFallback?: boolean; prescriptionId?: string; prescriptionContextRequired?: boolean },
   ): Promise<VdaProcessResult> {
-    const fallback = processVdaQuery(query, patient, medications, observations, lang);
+    const fallback = () => processVdaQuery(query, patient, medications, observations, lang);
 
     if (!API_BASE_URL) {
-      return fallback;
+      if (options?.disableLocalFallback) throw new Error('VDA_BACKEND_UNAVAILABLE');
+      return fallback();
     }
 
     try {
@@ -254,7 +256,8 @@ class ApiService {
 
       if (!activeSession) {
         console.warn('[VDA API] Could not establish session_id, falling back to local engine');
-        return fallback;
+        if (options?.disableLocalFallback) throw new Error('VDA_SESSION_UNAVAILABLE');
+        return fallback();
       }
 
       const response = await fetch(`${API_BASE_URL}/api/v1/sessions/${activeSession}/turns`, {
@@ -266,7 +269,9 @@ class ApiService {
         body: JSON.stringify({
           input_text: query,
           speaker: 'self',
-          language: lang
+          language: lang,
+          ...(options?.prescriptionId ? { prescription_id: options.prescriptionId } : {}),
+          ...(options?.prescriptionContextRequired ? { prescription_context_required: true } : {}),
         })
       });
 
@@ -300,9 +305,38 @@ class ApiService {
       return { message, escalationDetected: isEscalated, responseType: turnResult.response_type };
     } catch (err) {
       console.warn('[VDA API] Backend turn endpoint error:', err);
-      if (USE_MOCK_FALLBACK) return fallback;
+      if (USE_MOCK_FALLBACK && !options?.disableLocalFallback) return fallback();
       throw err;
     }
+  }
+
+  /**
+   * Refreshes only the server-side, privacy-minimized prescription context.
+   * The app never uploads medicine facts, investigations, notification IDs, or
+   * acknowledgement history here—only its confirmed reminder schedule.
+   */
+  async refreshPrescriptionSessionContext(
+    sessionId: string,
+    prescriptionId: string,
+    reminders: Array<{ medicineName: string; times: string[] }>,
+  ): Promise<void> {
+    if (!API_BASE_URL) return;
+    await this.initAuthToken();
+    const response = await fetch(
+      `${API_BASE_URL}/api/v1/sessions/${encodeURIComponent(sessionId)}/prescription-context`,
+      {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({
+          prescription_id: prescriptionId,
+          reminders: reminders.map((reminder) => ({
+            medicine_name: reminder.medicineName,
+            reminder_times: reminder.times,
+          })),
+        }),
+      },
+    );
+    if (!response.ok) throw new Error(`Prescription context API error ${response.status}`);
   }
 
   /** Uploads patient-recorded audio to the authenticated backend STT boundary. */
@@ -391,20 +425,13 @@ class ApiService {
     );
   }
 
-  /**
-   * Opens the installed official Android package when available. The browser is
-   * the safe fallback; VDA never sends credentials or health records with it.
-   */
+  /** Opens the official patient sign-in page without transferring VDA data. */
   async openEsanjeevani(): Promise<void> {
-    let openedApp = false;
     if (Capacitor.isNativePlatform()) {
-      try {
-        openedApp = (await EsanjeevaniLauncher.open()).openedApp;
-      } catch {
-        openedApp = false;
-      }
+      await EsanjeevaniExternalLink.open();
+      return;
     }
-    if (!openedApp) window.open(ESANJEEVANI_OFFICIAL_URL, '_blank', 'noopener,noreferrer');
+    window.open(ESANJEEVANI_OFFICIAL_URL, '_blank', 'noopener,noreferrer');
   }
 
   /**
@@ -435,7 +462,6 @@ class ApiService {
       }
 
       const result = await response.json();
-      console.log('[VDA API] Uploaded prescription successfully:', result);
       return result;
     } catch (err) {
       console.warn('[VDA API] Prescription upload error:', err);
