@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Mic, MicOff, Send, Volume2, VolumeX, Pill, Activity, Building2, Award, AlertTriangle, QrCode, ShieldAlert, Sparkles, CheckCircle2, Phone, Paperclip, FileText, X, LoaderCircle, Star, Flame, Clock } from 'lucide-react';
-import { ChatMessage, ClinicalFollowUp, FollowUpProgress, FhirMedication, FhirObservation, LanguageCode, PatientDemographics } from '../types';
+import { ChatMessage, FhirMedication, FhirObservation, LanguageCode, PatientDemographics } from '../types';
 import { getTranslation, playChime, getLocalizedField } from '../utils/i18n';
 import { getChatMessageText, getQuickActionLabel, getCardTitle } from '../utils/vdaEngine';
 import { apiService } from '../services/api';
@@ -23,15 +23,12 @@ interface VdaTabProps {
   observations: FhirObservation[];
   lang: LanguageCode;
   messages: ChatMessage[];
-  clinicalFollowUps?: ClinicalFollowUp[];
-  followUpProgress?: FollowUpProgress;
   isProcessing: boolean;
   onSendMessage: (text: string, file?: File) => void;
   onToggleMedicationTaken?: (medId: string) => void;
   onNavigateTab: (tab: 'vda' | 'records' | 'facilities' | 'profile') => void;
   onTriggerEscalation: (reason: string) => void;
   onOpenLogVital: () => void;
-  onRecordClinicalFollowUpAttendance?: (followUpId: string, attended: boolean) => Promise<string>;
 }
 
 export const VdaTab: React.FC<VdaTabProps> = ({
@@ -40,15 +37,12 @@ export const VdaTab: React.FC<VdaTabProps> = ({
   observations,
   lang,
   messages,
-  clinicalFollowUps,
-  followUpProgress,
   isProcessing,
   onSendMessage,
   onToggleMedicationTaken,
   onNavigateTab,
   onTriggerEscalation,
   onOpenLogVital,
-  onRecordClinicalFollowUpAttendance,
 }) => {
   const [inputText, setInputText] = useState('');
   const [voiceState, setVoiceState] = useState<'idle' | 'recording' | 'transcribing' | 'auto_sending' | 'waiting_for_vda' | 'error'>('idle');
