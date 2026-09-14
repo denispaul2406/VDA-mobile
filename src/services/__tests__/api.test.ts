@@ -99,7 +99,7 @@ describe('VDA Mobile — ApiService', () => {
       await apiService.openEsanjeevani();
 
       expect(openSpy).toHaveBeenCalledWith(
-        'https://esanjeevani.mohfw.gov.in/',
+        'https://esanjeevani.mohfw.gov.in/#/patient/signin',
         '_blank',
         'noopener,noreferrer'
       );

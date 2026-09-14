@@ -15,9 +15,10 @@ vi.mock('@capacitor/core', () => ({
   }),
 }));
 
-// Mock HTMLElement scrollTo for jsdom
+// Mock HTMLElement scrollTo and scrollIntoView for jsdom
 if (typeof HTMLElement !== 'undefined') {
   HTMLElement.prototype.scrollTo = vi.fn();
+  HTMLElement.prototype.scrollIntoView = vi.fn();
 }
 
 // Mock AudioContext for Web Audio API

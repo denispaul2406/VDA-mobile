@@ -12,16 +12,27 @@
 
 ---
 
-## 📱 Pre-Built Android APK
+## 📱 Pre-Built Android APK (`VDA.apk`)
 
 A production-ready Android Debug APK has been compiled and is available directly in the project root:
-- **Location:** `vda-health-assistant.apk` (or `android/app/build/outputs/apk/debug/app-debug.apk`)
-- **Size:** ~4.1 MB
+- **Primary Binary:** [`VDA.apk`](VDA.apk) (also saved as `vda-health-assistant.apk`)
+- **Size:** `4.29 MB` (4,298,411 bytes)
 - **Target Platform:** Android 7.0 (API 24) to Android 15/16 (API 36)
-- **Install on Device:**
+- **Production Backend Connected:** `https://vda-api.mdtlabs.org`
+- **Install on Device via ADB:**
   ```bash
-  adb install -r vda-health-assistant.apk
+  adb install -r VDA.apk
   ```
+
+---
+
+## 🌐 Live Cloud Production Endpoints
+
+| Service | Endpoint URL | Status | Details |
+| :--- | :--- | :--- | :--- |
+| **Backend API Gateway** | [https://vda-api.mdtlabs.org](https://vda-api.mdtlabs.org) | **ACTIVE (HTTPS)** | Direct API gateway for mobile app |
+| **Admin Portal** | [https://vda-admin.mdtlabs.org](https://vda-admin.mdtlabs.org) | **ACTIVE (HTTPS)** | Clinical supervision and telemetry |
+| **API Health** | [https://vda-api.mdtlabs.org/api/v1/health](https://vda-api.mdtlabs.org/api/v1/health) | **HEALTHY** | `{"database":"healthy","redis":"healthy"}` |
 
 ---
 
@@ -579,10 +590,70 @@ vda-mobile-app/
 │   ├── App.tsx                # Main app layout, tab navigation & state coordinator
 │   └── main.tsx               # React application entry point
 ├── capacitor.config.ts        # Capacitor configuration (App ID: in.gov.abdm.vdahealth)
-├── vda-health-assistant.apk   # Ready-to-install Android Debug APK (~4.1 MB)
+├── VDA.apk                    # Latest Production Android Debug APK (4.29 MB)
+├── vda-health-assistant.apk   # Pre-built Android Debug APK
 ├── vite.config.ts             # Vite build & TailwindCSS v4 plugin setup
 └── package.json               # NPM scripts, dependencies and project metadata
 ```
+
+---
+
+---
+
+## 💊 Prescription-Only Medicine Reminders & Native Notifications
+
+The application implements a patient-centric, device-local prescription reminder architecture designed in alignment with recent clinical feedback:
+
+1. **Strict Prescription-Only Boundary:**
+   - Medication explanations and schedules are derived **strictly from the patient's uploaded prescription document** (PDF/JPG/PNG) via the backend prescription extraction engine.
+   - Pre-existing EHR profile records (`ctx.medications`) are never mixed with the active uploaded prescription to avoid stale or contradictory medical guidance.
+
+2. **Native Push & Local Notifications (`@capacitor/local-notifications`):**
+   - Schedules native Android alarms and notifications at the exact times specified on the doctor's prescription (e.g. 08:00 AM, 02:00 PM, 08:00 PM).
+   - Operates with device-local persistence via `@capacitor/preferences` and `localStorage`, ensuring reminders trigger even without internet connectivity.
+   - Provides instant "Taken" and "Later" (15-min snooze) quick action handling.
+
+3. **Positive Gamification (Zero Penalties):**
+   - Rewards adherence with encouraging positive milestones: daily consistency streaks, earned stars, and milestone badges (e.g., *पहला कदम / First Dose*, *3 दिन का नियम / 3-Day Streak*, *हफ्ते का नियम / Weekly Master*, *तारा मरीज / Star Patient*).
+   - **Strictly penalty-free:** No point deductions, loss of streak, or negative alerts for unticked or snoozed doses.
+
+4. **Direct Emergency Intervention (Zero Blocking Queues):**
+   - Triage red-flags and SOS speed dial connect patients immediately to:
+     - **108 Emergency Ambulance** and **102 Maternal/Child Ambulance**
+     - **National Teleconsultation:** Direct one-tap launch to eSanjeevani Patient Portal (`https://esanjeevani.mohfw.gov.in/#/patient/signin`)
+     - **Nearby Public Hospitals:** Instant geo-locator with bed availability and contact numbers.
+
+---
+
+## 🧪 Comprehensive Vitest Test Suite
+
+The mobile application features complete unit and integration test coverage verifying the VDA Engine, clinical safety gates, local prescription storage, and API fallback mechanisms:
+
+```bash
+npm test -- --run
+```
+
+```
+Test Files  8 passed (8)
+     Tests  113 passed (113)
+  Duration  100% pass
+```
+
+- `src/__tests__/security.test.ts`: Injection defense, XSS sanitation, red-flag triage.
+- `src/utils/__tests__/vdaEngine.test.ts`: Query classification and response generation.
+- `src/utils/__tests__/localMedicationStorage.test.ts`: Local prescription storage, penalty-free streaks & stars.
+- `src/utils/__tests__/safetyGate.test.ts`: Deterministic red-flag emergency detection.
+- `src/utils/__tests__/i18n.test.ts`: Multilingual translations and localized field selection.
+- `src/services/__tests__/api.test.ts`: Live backend session management, eSanjeevani launch, and offline fallback.
+- `src/components/__tests__/EscalationModal.test.tsx`: Direct emergency action modal (108/102 ambulance & hospital locator).
+- `src/components/__tests__/LogVitalModal.test.tsx`: Patient vitals logging.
+
+---
+
+## 🔗 Repository Links
+
+- **Medtronic LABS Organization:** [https://github.com/Medtronic-LABS/vda-mobile](https://github.com/Medtronic-LABS/vda-mobile)
+- **Personal Repository:** [https://github.com/denispaul2406/VDA-mobile](https://github.com/denispaul2406/VDA-mobile)
 
 ---
 

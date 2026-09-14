@@ -1,87 +1,288 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ExternalLink, Hospital, Phone, Send, ShieldAlert, Volume2, VolumeX } from 'lucide-react';
-import { ClinicalReviewState, LanguageCode } from '../types';
-import { speakText, stopSpeaking } from '../utils/i18n';
+import React, { useState, useEffect } from 'react';
+import { AlertTriangle, ExternalLink, Hospital, Phone, ShieldAlert, Volume2, VolumeX, X } from 'lucide-react';
+import { ClinicalReviewState, LanguageCode, Facility } from '../types';
+import { speakText, stopSpeaking, playChime } from '../utils/i18n';
+import { FACILITIES_LIST } from '../data/syntheticData';
 
-interface EscalationModalProps {
-  review: ClinicalReviewState;
+export interface EscalationModalProps {
+  review?: ClinicalReviewState;
   lang: LanguageCode;
-  onSendMessageToClinician: (text: string) => Promise<void>;
+  onSendMessageToClinician?: (text: string) => Promise<void>;
   onOpenTeleconsultation: () => Promise<void>;
+  onClose?: () => void;
+  symptomQuery?: string;
+  nearbyFacilities?: Facility[];
+  emergencyInstruction?: string;
 }
 
-const label = (lang: LanguageCode, hi: string, en: string) => lang === 'hi' ? hi : en;
+const label = (lang: LanguageCode, hi: string, en: string) => (lang === 'hi' ? hi : en);
 
-/** Server-backed clinician chat. Emergency cards follow the initial patient message. */
-export const EscalationModal: React.FC<EscalationModalProps> = ({ review, lang, onSendMessageToClinician, onOpenTeleconsultation }) => {
-  const [replyText, setReplyText] = useState('');
-  const [sending, setSending] = useState(false);
-  const [actionError, setActionError] = useState('');
-  const [speakingMessage, setSpeakingMessage] = useState<number | null>(null);
-  const [speakingGuidance, setSpeakingGuidance] = useState(false);
+/**
+ * Direct Emergency Assistance Screen
+ *
+ * Requirements:
+ * - Remove the clinician emergency escalation chat queue
+ * - Directly show nearby hospitals, eSanjeevani, and the 108 ambulance option
+ */
+export const EscalationModal: React.FC<EscalationModalProps> = ({
+  review,
+  lang,
+  onOpenTeleconsultation,
+  onClose,
+  symptomQuery,
+  nearbyFacilities,
+  emergencyInstruction,
+}) => {
+  const [speaking, setSpeaking] = useState(false);
   const [showAllFacilities, setShowAllFacilities] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const facilitiesRef = useRef<HTMLElement>(null);
-  const connected = review.clinicalChatState === 'CLINICIAN_CONNECTED';
-  const fallbackVisible = review.teleconsultationOffered && !connected;
 
   useEffect(() => {
-    if (!scrollRef.current) return;
-    scrollRef.current.scrollTo({ top: fallbackVisible ? 0 : scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [review.messages, fallbackVisible]);
-  useEffect(() => () => stopSpeaking(), []);
+    playChime('start');
+    return () => stopSpeaking();
+  }, []);
 
-  const send = async (event: React.FormEvent) => {
-    event.preventDefault();
-    const message = replyText.trim();
-    if (!message || sending) return;
-    setSending(true); setActionError('');
-    try { await onSendMessageToClinician(message); setReplyText(''); }
-    catch { setActionError(label(lang, 'संदेश अभी नहीं भेजा जा सका। कृपया फिर प्रयास करें।', 'Your message could not be sent. Please try again.')); }
-    finally { setSending(false); }
+  const guidanceText =
+    emergencyInstruction ||
+    label(
+      lang,
+      'यदि आपकी स्थिति गंभीर है या सीने में तेज दर्द, सांस लेने में तकलीफ अथवा बेहोशी जैसे लक्षण हैं, तो बिल्कुल इंतजार न करें। तुरंत 108 पर एम्बुलेंस बुलाएं या नजदीकी बड़े अस्पताल जाएं।',
+      'If your condition is serious or getting worse, do not wait. Go to a nearby large hospital or call an ambulance at 108 now.',
+    );
+
+  const toggleSpeakGuidance = () => {
+    if (speaking) {
+      stopSpeaking();
+      setSpeaking(false);
+    } else {
+      setSpeaking(true);
+      speakText(guidanceText, lang, () => setSpeaking(false));
+    }
   };
-  const openTeleconsultation = async () => {
-    setActionError('');
-    try { await onOpenTeleconsultation(); }
-    catch { setActionError(label(lang, 'eSanjeevani खोलने में समस्या हुई।', 'Unable to open eSanjeevani.')); }
-  };
-  const speak = (text: string, index: number) => {
-    if (speakingMessage === index) { stopSpeaking(); setSpeakingMessage(null); setSpeakingGuidance(false); return; }
-    setSpeakingGuidance(false); setSpeakingMessage(index); speakText(text, lang, () => setSpeakingMessage(null));
-  };
-  const guidanceText = label(
-    lang,
-    'अगर आपकी हालत गंभीर है या तकलीफ बढ़ रही है, तो इंतजार न करें। तुरंत नजदीकी बड़े अस्पताल जाएं या एम्बुलेंस बुलाएं।',
-    'If your condition is serious or getting worse, do not wait. Go to a nearby large hospital or call an ambulance now.',
+
+  const facilitiesSource =
+    nearbyFacilities && nearbyFacilities.length > 0
+      ? nearbyFacilities
+      : review?.nearbyFacilities && review.nearbyFacilities.length > 0
+      ? review.nearbyFacilities
+      : FACILITIES_LIST;
+
+  const visibleFacilities = facilitiesSource.slice(0, showAllFacilities ? 10 : 3);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="emergency-modal-title"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-3 sm:p-4 overflow-y-auto"
+    >
+      <div className="relative w-full max-w-lg rounded-2xl border-2 border-red-500/80 bg-slate-950 text-slate-100 shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+        {/* Header */}
+        <header className="flex items-center justify-between border-b border-red-900/60 bg-red-950/70 px-4 py-3 shrink-0">
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-red-500/25 text-red-400 border border-red-500/40">
+              <ShieldAlert className="h-5 w-5" />
+            </span>
+            <div>
+              <h2 id="emergency-modal-title" className="text-sm sm:text-base font-extrabold text-white">
+                {label(lang, '🚨 आपातकालीन सहायता (Emergency)', '🚨 Clinical Assistance & Emergency')}
+              </h2>
+              <p className="text-[11px] text-red-200/90 font-medium">
+                {symptomQuery
+                  ? `${label(lang, 'लक्षण: ', 'Reported: ')} ${symptomQuery}`
+                  : review?.messages?.[0]?.text
+                  ? review.messages[0].text
+                  : label(lang, 'तुरंत सहायता उपलब्ध', 'Direct Emergency Assistance')}
+              </p>
+            </div>
+          </div>
+          {onClose && (
+            <button
+              onClick={() => {
+                stopSpeaking();
+                onClose();
+              }}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              aria-label="Close modal"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
+        </header>
+
+        {/* Scrollable Body */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* Urgent Warning Alert */}
+          <section className="rounded-xl border border-red-500/40 bg-red-950/40 p-3.5 text-red-100">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="h-5 w-5 shrink-0 text-red-400 mt-0.5" />
+              <div className="flex-1">
+                <b className="block text-xs font-bold text-red-200 uppercase tracking-wide">
+                  {label(lang, 'जरूरी आपातकालीन सूचना', 'Important Emergency Information')}
+                </b>
+                <p className="mt-1 text-xs sm:text-sm leading-relaxed text-red-100">{guidanceText}</p>
+                <button
+                  type="button"
+                  onClick={toggleSpeakGuidance}
+                  className="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-200 text-xs font-semibold transition-colors"
+                >
+                  {speaking ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+                  {speaking ? label(lang, 'रोकें (Stop)', 'Stop') : label(lang, 'बोलकर सुनें (Listen)', 'Listen')}
+                </button>
+              </div>
+            </div>
+          </section>
+
+          {/* Primary Action 1: Call Ambulance (108 & 102) */}
+          <div>
+            <span className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+              {label(lang, '1. तुरंत एम्बुलेंस सेवा', '1. Immediate Ambulance Service')}
+            </span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <a
+                href="tel:108"
+                className="flex items-center justify-between p-3.5 rounded-xl border-2 border-red-500 bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-950 transition-all active:scale-95"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/20">
+                    <Phone className="h-5 w-5 text-white" />
+                  </span>
+                  <div>
+                    <b className="block text-base leading-none">108</b>
+                    <span className="text-[11px] text-red-100 font-medium">
+                      {label(lang, 'एम्बुलेंस (Toll-Free)', 'Ambulance (Free)')}
+                    </span>
+                  </div>
+                </div>
+                <span className="text-xs font-bold bg-white/20 px-2.5 py-1 rounded-lg">
+                  {label(lang, 'कॉल करें', 'Call')}
+                </span>
+              </a>
+
+              <a
+                href="tel:102"
+                className="flex items-center justify-between p-3.5 rounded-xl border border-amber-500/50 bg-slate-900 hover:bg-slate-800 text-amber-200 transition-all active:scale-95"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/20 text-amber-300">
+                    <Phone className="h-5 w-5" />
+                  </span>
+                  <div>
+                    <b className="block text-base leading-none text-white">102</b>
+                    <span className="text-[11px] text-slate-300 font-medium">
+                      {label(lang, 'मातृ एवं शिशु एम्बुलेंस', 'Maternal & Child')}
+                    </span>
+                  </div>
+                </div>
+                <span className="text-xs font-bold bg-amber-500/20 px-2.5 py-1 rounded-lg">
+                  {label(lang, 'कॉल करें', 'Call')}
+                </span>
+              </a>
+            </div>
+          </div>
+
+          {/* Primary Action 2: eSanjeevani Teleconsultation */}
+          <div>
+            <span className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+              {label(lang, '2. eSanjeevani राष्ट्रीय टेलीकंसल्टेशन', '2. eSanjeevani Teleconsultation')}
+            </span>
+            <div className="p-3.5 rounded-xl border border-sky-500/40 bg-sky-950/30 flex items-center justify-between gap-3">
+              <div>
+                <b className="block text-sm text-sky-200">
+                  {label(lang, 'eSanjeevani OPD (भारत सरकार)', 'eSanjeevani OPD (Govt. of India)')}
+                </b>
+                <p className="text-[11px] text-slate-300 mt-0.5">
+                  {label(lang, 'निःशुल्क डॉक्टर से ऑनलाइन परामर्श या 1075 पर कॉल करें', 'Direct online doctor consultation or call helpline 1075')}
+                </p>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <a
+                  href="tel:1075"
+                  className="px-2.5 py-1.5 rounded-lg border border-sky-400/50 bg-sky-900/60 text-sky-200 text-xs font-bold flex items-center gap-1"
+                >
+                  <Phone className="w-3.5 h-3.5" /> 1075
+                </a>
+                <button
+                  type="button"
+                  onClick={() => onOpenTeleconsultation()}
+                  className="px-3 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 text-xs font-bold flex items-center gap-1 transition-colors"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" /> {label(lang, 'डॉक्टर से बात करें', 'Talk to eSanjeevani')}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Primary Action 3: Nearby Emergency Hospitals */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                {label(lang, '3. नजदीकी आपातकालीन अस्पताल', '3. Nearby Emergency Hospitals')}
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowAllFacilities(!showAllFacilities)}
+                className="text-xs text-emerald-400 font-semibold hover:underline"
+              >
+                {showAllFacilities ? label(lang, 'कम देखें', 'Show fewer') : label(lang, 'और देखें', 'Show more')}
+              </button>
+            </div>
+
+            <div className="space-y-2.5">
+              {visibleFacilities.map((facility, index) => (
+                <article
+                  key={`${facility.id || facility.name}-${index}`}
+                  className="p-3 rounded-xl border border-slate-800 bg-slate-900 text-xs space-y-1.5 hover:border-slate-700 transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <b className="text-sm font-bold text-white block">{facility.name}</b>
+                      <p className="text-[11px] text-slate-300">{[facility.district, facility.city, facility.state].filter(Boolean).join(', ')}</p>
+                    </div>
+                    {facility.contactPhone && (
+                      <a
+                        href={`tel:${facility.contactPhone}`}
+                        className="p-2 rounded-lg bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 flex items-center gap-1 font-bold text-[11px] shrink-0"
+                      >
+                        <Phone className="w-3.5 h-3.5" /> {label(lang, 'कॉल', 'Call')}
+                      </a>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                    <span className="px-2 py-0.5 rounded-md bg-red-500/20 text-red-300 font-semibold border border-red-500/30">
+                      🚨 24x7 Emergency
+                    </span>
+                    {(facility.schemes?.includes('AYUSHMAN_BHARAT') || facility.schemes?.includes('PMJAY')) && (
+                      <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30">
+                        🛡️ PM-JAY Listed
+                      </span>
+                    )}
+                    {facility.hospitalType && (
+                      <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-300">
+                        {facility.hospitalType}
+                      </span>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <footer className="border-t border-slate-800 bg-slate-900/90 p-3 flex justify-end shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              stopSpeaking();
+              if (onClose) onClose();
+            }}
+            className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-colors"
+          >
+            {label(lang, 'वापस जाएं (Dismiss)', 'Dismiss')}
+          </button>
+        </footer>
+      </div>
+    </div>
   );
-  const speakGuidance = () => {
-    if (speakingGuidance) { stopSpeaking(); setSpeakingGuidance(false); return; }
-    setSpeakingMessage(null); setSpeakingGuidance(true);
-    speakText(guidanceText, lang, () => setSpeakingGuidance(false));
-  };
-  const visibleFacilities = showAllFacilities
-    ? review.nearbyFacilities
-    : review.nearbyFacilities.slice(0, 3);
-
-  const emergencyGuidance = <section className="rounded-xl border border-red-400/35 bg-red-950/40 px-3 py-2.5 text-red-50">
-    <div className="flex gap-2"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-300" /><div><b className="block text-xs">{label(lang, 'जरूरी सूचना', 'Important information')}</b><p className="mt-0.5 text-xs leading-relaxed">{guidanceText}</p><button type="button" onClick={speakGuidance} className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-red-100 underline underline-offset-2">{speakingGuidance ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}{speakingGuidance ? label(lang, 'रोकें', 'Stop') : label(lang, 'सुनें', 'Listen')}</button></div></div>
-  </section>;
-  const fallbackCard = fallbackVisible ? <section className="rounded-xl border border-amber-300/30 bg-slate-900 p-3 space-y-3">
-    <div><b className="text-sm text-amber-100">{label(lang, 'क्लिनिकल टीम अभी नहीं जुड़ पाई है।', 'The clinical team has not joined yet.')}</b><p className="mt-1 text-xs leading-relaxed text-slate-300">{label(lang, 'गंभीर तकलीफ में मदद लेने में देरी न करें। eSanjeevani आपात मदद की जगह नहीं है।', 'Do not delay getting help for serious symptoms. eSanjeevani does not replace emergency care.')}</p></div>
-    <div className="grid grid-cols-3 gap-2"><a href="tel:108" className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl border border-red-400/45 bg-red-950/45 px-2 text-center text-xs font-bold text-red-50"><Phone className="h-4 w-4 shrink-0" />{label(lang, 'एम्बुलेंस बुलाएं', 'Call ambulance')}</a><button type="button" onClick={() => facilitiesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl border border-slate-600 bg-slate-800 px-2 text-center text-xs font-semibold text-white"><Hospital className="h-4 w-4 shrink-0 text-emerald-300" />{label(lang, 'नजदीकी अस्पताल', 'Nearby hospitals')}</button><button type="button" onClick={() => void openTeleconsultation()} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-white px-2 text-center text-xs font-bold text-slate-900"><ExternalLink className="h-4 w-4 shrink-0" />{label(lang, 'eSanjeevani से बात करें', 'Talk to eSanjeevani')}</button></div>
-    <section ref={facilitiesRef} className="grid gap-2 border-t border-slate-700 pt-3"><b className="text-xs text-slate-200">{label(lang, 'नजदीकी अस्पताल', 'Nearby hospitals')}</b>{review.nearbyFacilities.length === 0 && <p className="text-xs text-slate-400">{label(lang, 'इस जगह के लिए कोई उपयुक्त अस्पताल नहीं मिला। 108 पर कॉल करें या नजदीकी बड़े अस्पताल जाएं।', 'No suitable hospital was found for this area. Call 108 or go to a nearby large hospital.')}</p>}{visibleFacilities.map((facility, index) => <article key={`${facility.name}-${index}`} className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-xs"><b className="block text-sm text-white">{facility.name}</b><p className="mt-0.5 text-slate-300">{[facility.district, facility.city, facility.state].filter(Boolean).join(', ')}</p>{(facility.hospitalType || facility.schemes.length > 0) && <p className="mt-1 text-slate-400">{[facility.hospitalType, facility.schemes.includes('AYUSHMAN_BHARAT') || facility.schemes.includes('PMJAY') ? 'PM-JAY listed' : ''].filter(Boolean).join(' • ')}</p>}<small className="mt-1 block text-amber-100">{facility.emergencyCapabilityVerified ? label(lang, 'आपात सुविधा की जानकारी स्रोत में दर्ज है। जाने से पहले पुष्टि कर लें।', 'The source lists emergency capability; please confirm before visiting.') : label(lang, 'जाने से पहले सुविधा की उपलब्धता की पुष्टि कर लें।', 'Please confirm availability with the facility before visiting.')}</small></article>)}{review.nearbyFacilities.length > 3 && <button type="button" onClick={() => setShowAllFacilities((value) => !value)} className="justify-self-start text-xs font-semibold text-emerald-300 underline underline-offset-2">{showAllFacilities ? label(lang, 'कम अस्पताल देखें', 'Show fewer hospitals') : label(lang, 'और अस्पताल देखें', 'See more hospitals')}</button>}</section>
-  </section> : null;
-
-  return <div className="absolute inset-0 z-50 flex flex-col overflow-hidden bg-slate-950 text-slate-100">
-    <header className="shrink-0 border-b border-slate-800 bg-slate-900 px-4 py-3 shadow-sm"><div className="flex items-center gap-2.5"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-red-500/15 text-red-300"><ShieldAlert className="h-5 w-5" /></span><div><h2 className="text-sm font-bold">{label(lang, '🚨 क्लिनिकल सहायता', '🚨 Clinical assistance')}</h2><p className={`text-xs ${connected ? 'text-emerald-300' : 'text-slate-400'}`}>{connected ? label(lang, '● क्लिनिकल टीम जुड़ गई है', '● Clinical team connected') : label(lang, '● क्लिनिकल टीम से कनेक्ट किया जा रहा है...', '● Connecting to the clinical team...')}</p></div></div></header>
-    <main ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto bg-slate-950 px-4 py-3 pb-24 space-y-3">
-      {!connected && !fallbackVisible && <section className="mx-auto max-w-sm rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-center text-xs text-slate-300"><b className="text-slate-100">{label(lang, 'Clinician से कनेक्ट किया जा रहा है...', 'Connecting to a clinician...')}</b><p className="mt-1">{label(lang, 'आमतौर पर कुछ ही समय लगता है। गंभीर स्थिति में emergency care लेने में देरी न करें।', 'This usually takes only a short time. Do not delay emergency care if symptoms are severe.')}</p></section>}
-      {review.messages.length === 0 && <><p className="mx-auto max-w-sm rounded-xl border border-slate-800 bg-slate-900 p-3 text-center text-xs text-slate-300">{label(lang, 'आपका संदेश clinician को भेजा जा रहा है।', 'Your message is being sent to the clinician.')}</p>{emergencyGuidance}{fallbackCard}</>}
-      {review.messages.map((message, index) => {
-        const clinician = message.speaker === 'CLINICIAN'; const isSpeaking = speakingMessage === index;
-        return <React.Fragment key={`${message.createdAt}-${index}`}><article className={`flex flex-col gap-1 ${clinician ? 'items-start' : 'items-end'}`}><b className={`text-[11px] ${clinician ? 'text-sky-300' : 'text-emerald-300'}`}>{clinician ? label(lang, 'क्लिनिकल टीम', 'Clinical team') : label(lang, 'आप', 'You')}</b><div className={`max-w-[88%] rounded-2xl px-3 py-2.5 text-sm leading-relaxed ${clinician ? 'rounded-bl-sm border border-slate-700 bg-slate-800 text-slate-100' : 'rounded-br-sm bg-emerald-600 text-white'}`}><p className="whitespace-pre-line">{message.text}</p><div className="mt-2 flex items-center justify-between gap-3 text-[10px] opacity-80"><span>{new Date(message.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>{clinician && <button type="button" onClick={() => speak(message.text, index)} className="inline-flex items-center gap-1">{isSpeaking ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}{isSpeaking ? label(lang, 'रोकें', 'Stop') : label(lang, 'सुनें', 'Listen')}</button>}</div></div></article>{index === 0 && <>{emergencyGuidance}{fallbackCard}</>}</React.Fragment>;
-      })}
-    </main>
-    <form onSubmit={send} className="absolute inset-x-0 bottom-0 flex shrink-0 gap-2 border-t border-slate-800 bg-slate-900/95 p-3 backdrop-blur"><input value={replyText} onChange={(event) => setReplyText(event.target.value)} placeholder={label(lang, 'क्लिनिकल टीम को संदेश लिखें', 'Write a message to the clinical team')} className="min-w-0 flex-1 rounded-2xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:border-emerald-400 focus:outline-none" /><button type="submit" disabled={sending || !replyText.trim()} className="rounded-xl bg-emerald-600 px-3 text-white disabled:opacity-40"><Send className="h-4 w-4" /></button>{actionError && <p role="alert" className="absolute bottom-[68px] left-3 right-3 rounded-lg border border-red-500/40 bg-red-950 p-2 text-xs text-red-100">{actionError}</p>}</form>
-  </div>;
 };

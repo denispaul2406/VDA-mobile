@@ -4,6 +4,7 @@ import { ChatMessage, ClinicalReviewState, FhirCondition, FhirDocument, FhirMedi
 import { SYNTHETIC_PATIENTS, FACILITIES_LIST, HEALTH_SCHEMES_LIST } from './data/syntheticData';
 import { getTranslation, playChime } from './utils/i18n';
 import { apiService } from './services/api';
+import { createLocalPrescriptionFromUpload } from './utils/localMedicationStorage';
 
 // Tab & Modal Components
 import { OnboardingModal } from './components/OnboardingModal';
@@ -13,6 +14,7 @@ import { FacilitiesTab } from './components/FacilitiesTab';
 import { ProfileTab } from './components/ProfileTab';
 import { LogVitalModal } from './components/LogVitalModal';
 import { MedicineRemindersModal } from './components/MedicineRemindersModal';
+import { EscalationModal } from './components/EscalationModal';
 import { MedicineReminderSnapshot, PrescriptionReminderDraft, classifyPrescriptionMedicineQuery, isPrescriptionMedicineFollowUp, medicineReminderService, parseReminderTime, prescriptionToReminderDraft } from './services/medicine-reminder.service';
 
 const emptyMedicineReminderSnapshot: MedicineReminderSnapshot = {
@@ -531,6 +533,9 @@ export default function App() {
     }
 
     let extractedDraft: PrescriptionReminderDraft | null = null;
+    if (attachmentFile) {
+      createLocalPrescriptionFromUpload(attachmentFile.name, undefined, attachmentInfo?.url);
+    }
     if (attachmentFile && currentSessionId) {
       try {
         await medicineReminderService.beginPrescriptionProcessing(currentPersonaKey);
@@ -657,6 +662,7 @@ export default function App() {
       setIsProcessingMessage(false);
     }
   };
+
 
   // Trigger manual or test escalation
   // The test control now sends the same input through the backend SafetyGate.
@@ -801,6 +807,17 @@ export default function App() {
             onDeleteReminder={deleteMedicineReminder}
             onEnableNotifications={enableMedicineNotifications}
             onDisableAll={disableAllMedicineReminders}
+          />
+        )}
+
+        {/* Direct Emergency Action Modal (Ambulance 108, eSanjeevani, Nearby Hospitals) */}
+        {clinicalReview?.reviewRequested && (
+          <EscalationModal
+            review={clinicalReview}
+            lang={lang}
+            onSendMessageToClinician={async () => {}}
+            onOpenTeleconsultation={openEmergencyEsanjeevani}
+            onClose={() => setClinicalReview(null)}
           />
         )}
 

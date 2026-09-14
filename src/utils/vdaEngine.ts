@@ -1,5 +1,6 @@
 import { AgentDomain, ChatMessage, FhirMedication, FhirObservation, LanguageCode, PatientDemographics } from '../types';
 import { runDeterministicSafetyGate, createEscalationPayload } from './safetyGate';
+import { getLatestLocalPrescription, getTodayMedicineReminders } from './localMedicationStorage';
 
 export interface VdaProcessResult {
   message: ChatMessage;
@@ -47,10 +48,10 @@ export function processVdaQuery(
         id: `msg-${Date.now()}`,
         sender: 'vda',
         agent: 'safety_gate',
-        text: `CRITICAL ALERT: Your reported symptom "${query}" requires urgent clinician review. I have immediately connected you to AIIMS Clinical Emergency Triage.`,
-        textHi: `अति महत्वपूर्ण चेतावनी: आपके लक्षण "${query}" के लिए तुरंत डॉक्टर की सलाह आवश्यक है। मैंने आपको एम्स आपातकालीन टीम से जोड़ दिया है।`,
-        textTa: `அவசர எச்சரிக்கை: உங்கள் அறிகுறி "${query}" உடனடி மருத்துவ பரிசோதனை தேவைப்படுகிறது. AIIMS அவசர மருத்துவ குழுவுடன் இணைக்கப்பட்டுள்ளீர்கள்.`,
-        textKn: `ತುರ್ತು ಎಚ್ಚರಿಕೆ: ನಿಮ್ಮ ಲಕ್ಷಣ "${query}" ತಕ್ಷಣದ ವೈದ್ಯಕೀಯ ತಪಾಸಣೆಯ ಅಗತ್ಯವಿದೆ. AIIMS ತುರ್ತು ವೈದ್ಯಕೀಯ ತಂಡಕ್ಕೆ ಸಂಪರ್ಕಿಸಲಾಗಿದೆ.`,
+        text: `CRITICAL ALERT: Your reported symptom "${query}" requires immediate medical attention. Please call 108 for an emergency ambulance or go to the nearest hospital immediately.`,
+        textHi: `अति महत्वपूर्ण चेतावनी: आपके लक्षण "${query}" के लिए तुरंत आपातकालीन मदद की आवश्यकता है। कृपया तुरंत 108 पर एम्बुलेंस बुलाएं या नजदीकी अस्पताल जाएं।`,
+        textTa: `அவசர எச்சரிக்கை: உங்கள் அறிகுறி "${query}" உடனடி மருத்துவ உதவி தேவைப்படுகிறது. உடனே 108 ஆம்புலன்ஸை அழைக்கவும் அல்லது அருகிலுள்ள மருத்துவமனைக்குச் செல்லவும்.`,
+        textKn: `ತುರ್ತು ಎಚ್ಚರಿಕೆ: ನಿಮ್ಮ ಲಕ್ಷಣ "${query}" ತಕ್ಷಣದ ತುರ್ತು ವೈದ್ಯಕೀಯ ಚಿಕಿತ್ಸೆ ಅಗತ್ಯವಿದೆ. ದಯವಿಟ್ಟು ತಕ್ಷಣ 108 ಆಂಬ್ಯುಲೆನ್ಸ್‌ಗೆ ಕರೆ ಮಾಡಿ ಅಥವಾ ಹತ್ತಿರದ ಆಸ್ಪತ್ರೆಗೆ ಹೋಗಿ.`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         isEscalationTrigger: true,
         audioAvailable: true
@@ -68,35 +69,66 @@ export function processVdaQuery(
   let cardData: ChatMessage['cardData'] = undefined;
   let quickActions: ChatMessage['quickActions'] = undefined;
 
-  // Medication Intent
-  if (/दवाई|दवा|मेडिसिन|மருந்து|மாத்திரை|ಔಷಧಿ|ಮಾತ್ರೆ|goli|medicine|medication|dose|metformin|telmisartan|glimepiride|thyronorm|खुराक|कब लेना/i.test(normalized)) {
+  // Medication Intent (Strictly based on uploaded prescription, never preexisting health records)
+  if (/दवाई|दवा|मेडिसिन|மருந்து|மாத்திரை|ಔಷಧಿ|ಮಾತ್ರೆ|goli|medicine|medication|dose|metformin|telmisartan|glimepiride|thyronorm|खुराक|कब लेना|prescription|पर्ची/i.test(normalized)) {
     agent = 'medication';
-    const untaken = medications.filter(m => !m.takenToday);
-    if (untaken.length > 0) {
-      replyText = `Namaste ${patient.name} ji! You have ${untaken.length} pending medication today: ${untaken.map(m => m.name).join(', ')}. Please take your medicines on time with water. Would you like to mark it as taken?`;
-      replyTextHi = `नमस्ते ${patient.name} जी! आपकी आज ${untaken.length} दवा बची है: ${untaken.map(m => m.nameHi || m.name).join(', ')}। कृपया समय पर दवा लें। क्या आपने ले ली?`;
-      replyTextTa = `வணக்கம் ${patient.name} அவர்களே! இன்று உங்களுக்கு ${untaken.length} மருந்து பாக்கி உள்ளது: ${untaken.map(m => m.nameTa || m.name).join(', ')}. சரியான நேரத்தில் மருந்து உட்கொள்ளவும்.`;
-      replyTextKn = `ನಮಸ್ಕಾರ ${patient.name} ಅವರೇ! ಇಂದು ನಿಮಗೆ ${untaken.length} ಔಷಧಿ ಬಾಕಿ ಇದೆ: ${untaken.map(m => m.nameKn || m.name).join(', ')}. ದಯವಿಟ್ಟು ಸಮಯಕ್ಕೆ ಸರಿಯಾಗಿ ಔಷಧಿ ತೆಗೆದುಕೊಳ್ಳಿ.`;
+    const latestPrescription = getLatestLocalPrescription();
+    const todayReminders = getTodayMedicineReminders();
+
+    if (latestPrescription && latestPrescription.medications.length > 0) {
+      const medLinesEn = latestPrescription.medications
+        .map(m => `• ${m.name} (${m.dosage}): ${m.frequency} at ${m.timings.join(', ')} (${m.instructions || 'with water'})`)
+        .join('\n');
+      const medLinesHi = latestPrescription.medications
+        .map(m => `• ${m.nameHi || m.name} (${m.dosage}): ${m.frequency}, समय: ${m.timings.join(', ')} (${m.instructions || 'पानी के साथ लें'})`)
+        .join('\n');
+
+      replyText = `Based strictly on your uploaded prescription (${latestPrescription.filename}):\n\n${medLinesEn}\n\nDaily medicine reminders are active based on these timings. Please remember to acknowledge each dose when taken.`;
+      replyTextHi = `आपकी अपलोड की गई डॉक्टर की पर्ची (${latestPrescription.filename}) के अनुसार:\n\n${medLinesHi}\n\nदवाओं के समय अनुसार आपके फोन पर रिमाइंडर सक्रिय हैं। कृपया दवा लेने के बाद यहाँ मार्क करें।`;
+      replyTextTa = `நீங்கள் பதிவேற்றிய மருந்துச்சீட்டின்படி:\n\n${medLinesEn}\n\nகுறிப்பிட்ட நேரங்களில் மருந்து நினைவூட்டல்கள் அமைக்கப்பட்டுள்ளன.`;
+      replyTextKn = `ನೀವು ಅಪ್‌ಲೋಡ್ ಮಾಡಿದ ಪ್ರಿಸ್ಕ್ರಿಪ್ಷನ್ ಪ್ರಕಾರ:\n\n${medLinesEn}\n\nನಿಗದಿತ ಸಮಯಕ್ಕೆ ಔಷಧಿ ರಿಮೈಂಡರ್‌ಗಳು ಸಕ್ರಿಯವಾಗಿವೆ.`;
+
+      cardData = {
+        type: 'medication_reminder',
+        title: "Prescription Medicine Schedule",
+        titleHi: 'पर्ची अनुसार दवा समय-सारणी',
+        titleTa: 'மருந்துச்சீட்டு அட்டவணை',
+        titleKn: 'ಪ್ರಿಸ್ಕ್ರಿಪ್ಷನ್ ಔಷಧಿ ವೇಳಾಪಟ್ಟಿ',
+        details: {
+          medications: todayReminders.map(r => ({
+            name: r.medicationName,
+            time: `${r.time} - ${r.foodRelation}`,
+            taken: r.taken
+          }))
+        }
+      };
+      quickActions = [
+        { label: 'View Prescriptions', labelHi: 'पर्ची देखें', labelTa: 'மருந்துச்சீட்டு காண்க', labelKn: 'ಪ್ರಿಸ್ಕ್ರಿಪ್ಷನ್ ನೋಡಿ', action: 'show_records_meds' },
+        { label: 'Jan Aushadhi Generic Refill', labelHi: 'जन औषधि केंद्र खोजें', labelTa: 'மக்கள் மருந்தகம் தேடுக', labelKn: 'ಜನ ಔಷಧಿ ಕೇಂದ್ರ ಹುಡುಕಿ', action: 'find_jan_aushadhi' }
+      ];
     } else {
-      replyText = `Great job! You have taken all your prescribed medicines today. Your medication adherence is currently at 94%. Next dose is scheduled for tomorrow.`;
-      replyTextHi = `बहुत बढ़िया! आपने आज की सभी दवाइयां समय पर ले ली हैं। आपका दवा अनुशासन 94% है। अगली खुराक कल है।`;
-      replyTextTa = `மிக நன்று! இன்றைய அனைத்து மருந்துகளையும் சரியாக உட்கொண்டுள்ளீர்கள். மருந்து ஒழுங்குமுறை 94%. அடுத்த டோஸ் நாளை.`;
-      replyTextKn = `ತುಂಬಾ ಒಳ್ಳೆಯದು! ನೀವು ಇಂದಿನ ಎಲ್ಲಾ ಔಷಧಿಗಳನ್ನು ಸಮಯಕ್ಕೆ ತೆಗೆದುಕೊಂಡಿದ್ದೀರಿ. ಔಷಧಿ ಶಿಸ್ತು 94% ಆಗಿದೆ. ಮುಂದಿನ ಡೋಸ್ ನಾಳೆ.`;
+      // No prescription uploaded yet
+      replyText = `To provide accurate medicine guidance, VDA relies strictly on your uploaded doctor prescription. Please tap the paperclip icon below to upload your prescription slip (PDF, JPG, or PNG). I will explain your medicines in simple language and set up daily reminders.`;
+      replyTextHi = `सटीक दवा जानकारी के लिए VDA केवल आपकी अपलोड की गई पर्ची का उपयोग करता है। कृपया नीचे दिए गए पिन (Paperclip) बटन से अपनी डॉक्टर की पर्ची अपलोड करें। मैं आपकी दवाओं को सरल भाषा में समझाऊंगा और समय अनुसार रिमाइंडर सेट कर दूंगा।`;
+      replyTextTa = `மருந்து விவரங்களை அறிய உங்கள் மருத்துவ மருந்துச்சீட்டைப் பதிவேற்றவும். மருந்துச்சீட்டைப் பதிவேற்றியதும் நேரங்களுக்கான நினைவூட்டல் அமைக்கப்படும்.`;
+      replyTextKn = `ನಿಖರವಾದ ಔಷಧಿ ಮಾಹಿತಿಗಾಗಿ ದಯವಿಟ್ಟು ನಿಮ್ಮ ವೈದ್ಯರ ಪ್ರಿಸ್ಕ್ರಿಪ್ಷನ್ ಅನ್ನು ಅಪ್‌ಲೋಡ್ ಮಾಡಿ. ನಂತರ ರಿಮೈಂಡರ್‌ಗಳನ್ನು ಹೊಂದಿಸಲಾಗುವುದು.`;
+
+      cardData = {
+        type: 'medication_reminder',
+        title: 'Prescription Upload Required',
+        titleHi: 'पर्ची अपलोड आवश्यक है',
+        titleTa: 'மருந்துச்சீட்டு தேவை',
+        titleKn: 'ಪ್ರಿಸ್ಕ್ರಿಪ್ಷನ್ ಅಗತ್ಯವಿದೆ',
+        details: {
+          status: 'NO_PRESCRIPTION_UPLOADED',
+          message: 'Please upload prescription to view medicine timings and reminders.',
+        },
+      };
+
+      quickActions = [
+        { label: 'Upload Prescription', labelHi: 'पर्ची अपलोड करें', labelTa: 'மருந்துச்சீட்டு பதிவேற்று', labelKn: 'ಪ್ರಿಸ್ಕ್ರಿಪ್ಷನ್ ಅಪ್‌ಲೋಡ್ ಮಾಡಿ', action: 'attach_prescription' }
+      ];
     }
-    cardData = {
-      type: 'medication_reminder',
-      title: "Today's Medicine Schedule",
-      titleHi: 'आज का दवा समय-सारणी',
-      titleTa: 'இன்றைய மருந்து அட்டவணை',
-      titleKn: 'ಇಂದಿನ ಔಷಧಿ ವೇಳಾಪಟ್ಟಿ',
-      details: {
-        medications: medications.map(m => ({ name: m.name, time: m.timeOfDay.join(', '), taken: m.takenToday }))
-      }
-    };
-    quickActions = [
-      { label: 'View All Meds', labelHi: 'दवाई सूची देखें', labelTa: 'மருந்து பட்டியல் காண்க', labelKn: 'ಔಷಧಿ ಪಟ್ಟಿ ನೋಡಿ', action: 'show_records_meds' },
-      { label: 'Jan Aushadhi Generic Refill', labelHi: 'जन औषधि केंद्र खोजें', labelTa: 'மக்கள் மருந்தகம் தேடுக', labelKn: 'ಜನ ಔಷಧಿ ಕೇಂದ್ರ ಹುಡುಕಿ', action: 'find_jan_aushadhi' }
-    ];
   }
   // Lab / Observation Intent
   else if (/sugar|शुगर|सब्ज़ी|சர்க்கரை|ಸಕ್ಕರೆ|hba1c|blood pressure|bp|रक्तदबाव|रक्तचाप|बीपी|ரத்த அழுத்தம்|ರಕ್ತದೊತ್ತಡ|रिपोर्ट|lab|test|जांच|creatinine|report/i.test(normalized)) {
