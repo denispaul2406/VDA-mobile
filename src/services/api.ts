@@ -458,7 +458,8 @@ class ApiService {
 
       if (!response.ok) {
         const errJson = await response.json().catch(() => ({}));
-        throw new Error(errJson.message || `Upload failed with status ${response.status}`);
+        const message = errJson.error?.detail?.message || errJson.error?.message || errJson.message || `Upload failed with status ${response.status}`;
+        throw new Error(message);
       }
 
       const result = await response.json();

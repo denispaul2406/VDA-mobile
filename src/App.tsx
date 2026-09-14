@@ -541,7 +541,20 @@ export default function App() {
         await medicineReminderService.beginPrescriptionProcessing(currentPersonaKey);
         setMedicineReminderSnapshot(await medicineReminderService.snapshot(currentPersonaKey));
         appendConversationMessage('मैं आपकी पर्ची देख रहा हूँ…');
-        const prescription = await apiService.uploadPrescription(currentSessionId, attachmentFile);
+        let prescription;
+        try {
+          prescription = await apiService.uploadPrescription(currentSessionId, attachmentFile);
+        } catch (uploadErr: any) {
+          // If session expired or encountered authorization mismatch, refresh session and retry once
+          const refreshRes = await apiService.createPatientSession(currentPersonaKey);
+          if (refreshRes?.session_id) {
+            currentSessionId = refreshRes.session_id;
+            setActiveSessionId(currentSessionId);
+            prescription = await apiService.uploadPrescription(currentSessionId, attachmentFile);
+          } else {
+            throw uploadErr;
+          }
+        }
         const draft = prescriptionToReminderDraft(currentPersonaKey, prescription);
         if (draft.medicines.length > 0) {
           extractedDraft = draft;
